@@ -295,7 +295,7 @@ A straightforward index of device positions cannot answer *both* "what is on scr
 
 ### 5.2 Build Algorithm
 
-The topology (nodes and parent-child edges) is fixed by the config; the build **derives** the flat index from it and never invents, reparents, rebalances, or spatially reorders the tree (Decision 1, §4.1). A pre-pass resolves templates, buckets each node under its parent in list order, and validates the tree (single root, acyclic, devices reachable); one DFS in that canonical order then produces the layout and all derived per-node fields:
+The topology (nodes and parent-child edges) is fixed by the config; the build **derives** the flat index from it and never invents, reparents, rebalances, or spatially reorders the tree (Decision 1). A pre-pass resolves templates, buckets each node under its parent in list order, and validates the tree (single root, acyclic, devices reachable); one DFS in that canonical order then produces the layout and all derived per-node fields:
 
 1. **Preorder (on entry):** assign `id = position`, emit the node into the flat array, record its kind (leaf device / internal group) and its channel definitions, and record a leaf's state offset. Recurse into children in canonical (list) order (Decision 8).
 2. **Postorder (on exit):** set a group's AABB to the union of its children's AABBs (a leaf's AABB is its device position); set `subtree_size = nodes emitted in this subtree` (node count) and `child_count` = emitted direct children. This also yields the parent-first flattening and the contiguous-subtree invariant directly.
@@ -665,22 +665,24 @@ The benchmark topology is produced by a **deterministic, seeded generator** (ver
 
 ## 17. Design Decisions
 
+Each decision states its decision in the first sentence, gives labelled aspects as bullets, records PRD-001 mappings as **Implements** or **Amends**, and closes with **Alternatives rejected.** Section coverage is given once, in the table above.
+
 | # | Decision | Recorded in |
 | --- | --- | --- |
-| 1 | One hierarchy serves both visibility and aggregation; frontier ordered by exact projected height | §2, §8.2–§8.4, §13 |
-| 2 | Aggregation by accumulator propagation over per-group channels | §7 (see Decision 4) |
-| 3 | Stateful per-viewer change suppression | §9 (Decision 15) |
+| 1 | One hierarchy serves both visibility and aggregation; frontier ordered by exact projected height | §2, §5.2, §8.2–§8.4, §13 |
+| 2 | Aggregation by accumulator propagation over per-group channels | §7 |
+| 3 | Stateful per-viewer change suppression | §9 |
 | 4 | Per-group local channels with explicit contributions | §2, §3.1, §4.1, §4.4, §5.2, §6, §7 |
 | 5 | Aggregation execution: always-on 60 Hz background pass | §2, §7 |
 | 6 | Attention channel (severity and absence) | §3.1, §4.4, §7.1, §9.2, §9.3, §13 |
-| 7 | Metric identity and state layout: device-local labels, per-device instances, device-major state | §2, §4.1, §4.2, §4.4, §5.2, §5.3, §6; amends FR-TD-04/FR-TD-08 |
-| 8 | Canonical child order and child enumeration | §4.4, §5.2, §5.3, §8.2 |
-| 9 | Config schema: JSON flat node list, explicit fields, shallow templates | §2, §4.1, §5.2 |
+| 7 | Metric identity and state layout: device-local labels, per-device instances, device-major state | §2, §4.1, §4.2, §4.4, §5.2, §5.3, §6, §9.4 |
+| 8 | Canonical child order and child enumeration | §4.1, §4.4, §5.2, §5.3, §8.2 |
+| 9 | Config schema: JSON flat node list, explicit fields, shallow templates | §2, §4.1, §5.2, §7.1, §14.2 |
 | 10 | Index layout for channel definitions and contributions; aggregation direction | §3.2, §4.4, §7 |
-| 11 | Wire identity | §8.2, §9.3 |
+| 11 | Wire identity | §8.2, §9.3, §9.4, §9.5 |
 | 12 | Hierarchy build details | §2, §5.2–§5.4 |
-| 13 | Benchmark host spec and fixed benchmark topology | §14; records FR-BR-05 |
-| 14 | Canonical reduction order and SIMD | §7, §9.2 |
+| 13 | Benchmark host spec and fixed benchmark topology | §14 |
+| 14 | Canonical reduction order and SIMD | §4.4, §5.5, §7, §9.2, §13, §14.3 |
 | 15 | Transport encoding, keyframes, and egress | §2, §9.2–§9.4 |
 | 16 | State-table concurrency: lock-free atomics, overwrite back-pressure | §2, §6 |
 | 17 | Client rendering: InstancedMesh over a pre-allocated VBO | §2, §10.1 |
@@ -690,74 +692,92 @@ The benchmark topology is produced by a **deterministic, seeded generator** (ver
 
 The frontier is a fixed-capacity **max-heap keyed on exact projected on-screen height**, with node id as the terminal tie-break.
 
-- The hierarchy is the single structure driving visibility and aggregation; the state table is a separate flat value store aligned to leaf order.
-- Exact height is the primary key; no bucket size-error bound or bucket-width parameter applies.
-- Ordering is a pure function of `(topology, state, camera, selection)`. Node id is a terminal tie-break for equal heights only. The index is immutable after boot, so the frontier holds node references and per-frame heights.
-- Heap operations are `O(log B)`; the frontier is bounded by `B` ≈ 5,000.
-- Budget-edge flicker is handled by the entry-count hysteresis in §8.3.
+- **Structure.** The hierarchy is the single structure driving visibility and aggregation; the state table is a separate flat value store aligned to leaf order.
+- **Primary key.** Exact height is the primary key.
+- **Ordering function.** Ordering is a pure function of `(topology, state, camera, selection)`; node id is a terminal tie-break for equal heights only. The index is immutable after boot, so the frontier holds node references and per-frame heights.
+- **Bounds.** Heap operations are `O(log B)`; the frontier is bounded by `B` ≈ 5,000.
+- **Budget-edge flicker.** Handled by the entry-count hysteresis in §8.3.
+- **Alternatives rejected.** Bucketed ordering with a bucket size-error bound or a bucket-width parameter.
 
 ### Decision 2 — Accumulator propagation
 
-Resolved by Decision 4. One shared 60 Hz pass computes each group's local channels by accumulator propagation over its configured contributions (its own device readings and its child groups' contributed channels), with mergeable accumulators (`mean → (sum, count)`), exact over the subtree, published as a consistent per-frame snapshot. Alternatives rejected: incremental push-up on ingest; per-viewer or per-request aggregation; event-driven recomputation; GPU/compute offload; alternative state layouts.
+One shared 60 Hz pass computes each group's local channels by accumulator propagation over its configured contributions (its own device readings and its child groups' contributed channels), with mergeable accumulators (`mean → (sum, count)`), exact over the subtree, published as a consistent per-frame snapshot.
+
+**Depends on:** Decision 4.
+
+- **Alternatives rejected.** Incremental push-up on ingest; per-viewer or per-request aggregation; event-driven recomputation; GPU/compute offload; alternative state layouts.
 
 ### Decision 3 — Stateful per-viewer change suppression
 
-One persistent session per viewer; each frame reconciles the visible set against the previous frame (appeared → full value, removed → prune, otherwise changed slots as absolute f16, ε-filtered in the wire domain); the selected object is streamed at full fidelity; full keyframe on (re)connect; per-session state bounded with latest-wins on egress. Resolved by Decision 15 (the baseline commits on an actual socket write; a dropped frame does not advance it).
+One persistent session per viewer; each frame reconciles the visible set against the previous frame (appeared → full value, removed → prune, otherwise changed slots as absolute f16, ε-filtered in the wire domain); the selected object is streamed at full fidelity; a full keyframe is sent on (re)connect; per-session state is bounded with latest-wins on egress.
+
+**Depends on:** Decision 15 — the baseline commits on an actual socket write; a dropped frame does not advance it.
+
+- **Alternatives rejected.** Periodic keyframes on a fixed cadence; unbounded backlog for a slow client (FR-TR-04).
 
 ### Decision 4 — Group channel model
 
-Each group node defines its own local channels — up to 16, in addition to its attention value — whose meaning is local to that group, and configures which of its channels contribute to which of its parent's channels. Implements PRD FR-TD-05/06/08, FR-AG-01.
+Each group node defines its own local channels — up to 16, in addition to its attention value — whose meaning is local to that group, and configures which of its channels contribute to which of its parent's channels.
+
+**Implements:** PRD-001 FR-TD-05, FR-TD-06, FR-TD-08, FR-AG-01.
 
 - **Local channel identity.** A channel's meaning is local to its group; there is no site-wide channel catalogue. The engine validates units per configured contribution; the client resolves a group entry's channel meanings per group.
 - **Explicit contributions, default none.** A group contributes nothing to its parent unless configured (FR-TD-06).
 - **Same-reduction contributions.** A channel may contribute only to a parent channel of the same reduction (boot-validated), so a group's value is the canonical subtree reduction.
 - **`mean` and `count`.** `mean` is carried as `(sum, count)` and merged as an accumulator, exact over the subtree's available readings; the wire carries the finalised scalar. `count` is the total number of available contributing readings in the subtree, merged from child `count` channels by summation (FR-AG-01).
 - **Channel states.** A configured channel is active (has a value), inactive (no available contributor → NaN), or not-used (not configured). All configured channels are carried in a keyframe; steady state carries changes.
-- **No `published` flag and no noop channel.** All configured channels are intended aggregates, and the per-frame sender logic governs transmission. Contributions are resolved at boot, so no target-resolution branch or noop channel is required.
 - **Terminology.** The canonical term is **aggregate channel**.
-
-The reserved attention channel is not addressable in configured contributions — it propagates implicitly. A status/coverage channel is not adopted (subsumed by per-metric absence). SIMD remains applicable (16 channels ≈ one 512-bit vector; permute/gather plus masked reduce, with effectiveness depending on wiring regularity). Per-group channel definitions plus contributions are the main config-volume cost; templating by group type mitigates it.
+- **Reserved attention.** The reserved attention channel is not addressable in configured contributions; it propagates implicitly.
+- **SIMD applicability.** 16 channels ≈ one 512-bit vector; permute/gather plus masked reduce, with effectiveness depending on wiring regularity.
+- **Config volume.** Per-group channel definitions plus contributions are the main config-volume cost; templating by group type mitigates it.
+- **Alternatives rejected.** A `published` flag and a noop channel — all configured channels are intended aggregates, the per-frame sender logic governs transmission, and contributions are resolved at boot, so no target-resolution branch is required; a status/coverage channel — subsumed by per-metric absence.
 
 ### Decision 5 — Aggregation execution
 
 One background pass at 60 Hz computes every group bottom-up from a **boot-built compiled plan** (seed ops: device metric → channel; merge ops: child channel → parent channel), with accumulator layout and reduction order fixed at boot. The pass runs continuously, independent of viewer count.
 
-- Freshness is re-evaluated every pass; aggregates change without ingest as metrics cross their freshness timeout (FR-IS-03).
-- Bottom-up is a reverse linear scan of the parent-first index; no recursion is required.
-- Double-buffered accumulators with an atomic buffer swap give the per-frame consistent snapshot (FR-AG-03).
-- Frame boundary (FR-AG-05): atomic latest-wins reads may include a reading accepted during the pass or defer it to the next frame; a reading accepted before the pass cannot be missed.
-- Unavailable contributions are skipped; `mean` accumulates `(sum, count)` over available inputs (FR-AG-04).
+- **Freshness.** Freshness is re-evaluated every pass; aggregates change without ingest as metrics cross their freshness timeout (FR-IS-03).
+- **Traversal.** Bottom-up is a reverse linear scan of the parent-first index; no recursion is required.
+- **Snapshot.** Double-buffered accumulators with an atomic buffer swap give the per-frame consistent snapshot (FR-AG-03).
+- **Frame boundary.** Atomic latest-wins reads may include a reading accepted during the pass or defer it to the next frame; a reading accepted before the pass cannot be missed (FR-AG-05).
+- **Availability.** Unavailable contributions are skipped; `mean` accumulates `(sum, count)` over available inputs (FR-AG-04).
+- **Alternatives rejected.** Event-driven recomputation and per-viewer or per-request aggregation, both recorded under Decision 2; a recursive walk — the reverse linear scan needs none.
 
 ### Decision 6 — Attention channel (severity and absence)
 
-Each group carries a reserved unitless attention channel (reduction `max`) on the fixed severity scale (normal, advisory, warning, critical), computed by the aggregation pass and streamed per entry; a device's attention level is the greatest of its metrics' contributions. Implements PRD FR-TD-11, FR-AG-06, FR-CD-03.
+Each group carries a reserved unitless attention channel (reduction `max`) on the fixed severity scale (normal, advisory, warning, critical), computed by the aggregation pass and streamed per entry; a device's attention level is the greatest of its metrics' contributions.
 
-- Value severity is derived from limits on metrics and channels, evaluated as the maximum over crossed limits; limits inherit the value's unit.
-- Absence severity is per metric: a metric contributes its configured absence level while it is unavailable; `0` is permitted. A per-device override is not adopted (it could be added later as a raise-only field).
-- The attention channel merges as a `max` channel, evaluated in the same bottom-up pass as aggregation, and is always contributed to its parent's attention channel; it is additional to the ≤16 configured channels.
-- Explicit out-of-service/offline signalling is out of scope (PRD §10); a device is offline when all of its metrics are unavailable (FR-IS-04; staleness per FR-IS-03).
-- Availability is orthogonal: offline and NaN markers are streamed separately; a node with no data and no nonzero contribution reports normal.
-- Fraction-based coverage policy is not adopted (PRD §10); `max` does not distinguish the number of missing devices.
+**Implements:** PRD-001 FR-TD-11, FR-AG-06, FR-CD-03.
+
+- **Value severity.** Derived from limits on metrics and channels, evaluated as the maximum over crossed limits; limits inherit the value's unit.
+- **Absence severity.** Per metric: a metric contributes its configured absence level while it is unavailable; `0` is permitted.
+- **Merge.** The attention channel merges as a `max` channel, evaluated in the same bottom-up pass as aggregation, and is always contributed to its parent's attention channel; it is additional to the ≤16 configured channels.
+- **Availability.** Offline and NaN markers are streamed separately; a device is offline when all of its metrics are unavailable (FR-IS-04; staleness per FR-IS-03); a node with no data and no nonzero contribution reports normal.
+- **Alternatives rejected.** Explicit out-of-service/offline signalling — out of scope (PRD-001 §10); fraction-based coverage policy — out of scope (PRD-001 §10), `max` does not distinguish the number of missing devices; a per-device absence override — not adopted, with the raise-only field left for a later decision.
 
 ### Decision 7 — Metric identity and state layout
 
-Metric identity is the per-device instance `(device, label)`; labels are chosen freely by each device and need only be unique within it. There is no site-wide metric vocabulary and no global kind slot. Implements PRD FR-TD-04/FR-TD-08.
+Metric identity is the per-device instance `(device, label)`; labels are chosen freely by each device and need only be unique within it.
 
-- **Identity.** A reading names `(device_id, metric_label)`; the label binds at boot to a per-device `metric_slot`. A slot is meaningful only within its device, so there is no global metric column.
-- **Typing.** Each metric instance declares its own unit and attributes (ε, freshness, limits, absence, contributions). The engine consumes **unit**, not the label and not any separate `quantity` concept; no channel combines contributors of different units (FR-AG-02).
+**Implements:** PRD-001 FR-TD-04, FR-TD-08.
+
+- **Identity.** A reading names `(device_id, metric_label)`; the label binds at boot to a per-device `metric_slot`, and a slot is meaningful only within its device.
+- **Typing.** Each metric instance declares its own unit and attributes (ε, freshness, limits, absence, contributions); no channel combines contributors of different units (FR-AG-02).
 - **State layout.** The state is normalized to one slot per metric instance: a compact `values` array with one entry per `(device, metric)`, plus a per-device row-offset array (CSR) that groups a device's instances and orders them in leaf order and local-slot order. Rows are exact, so there are no unused slots.
 - **Aggregation.** At boot each channel records the sorted state offsets of its contributing metric instances; the 60 Hz pass walks those offsets within the group's contiguous block of rows. K9 (≤ 5 µs over ≤ 1,000 contributors) is met by the bounded, prefetch-friendly gather rather than by a single sequential run.
 - **Encode.** A device's whole value set is contiguous, matching the per-entry "all values" requirement (FR-TR-02, §9.3).
 - **Client.** Cross-object comparison uses the attention channel (FR-CD-03); per-metric selection is per-object by construction, so no global vocabulary is needed.
+- **Alternatives rejected.** A site-wide metric vocabulary and a global kind slot; a global metric column; a separate `quantity` concept — the engine consumes **unit**, not the label.
 
 ### Decision 8 — Canonical child order and child enumeration
 
 Canonical child order is the order in which children are declared in the config, and the index carries a per-node child count for O(1) degree.
 
-- **Child order.** Children are an ordered sequence; the preorder DFS visits them in declaration order. This order defines node indices (wire identity, Decision 11), leaf order (CSR row order and the per-channel offset lists), the canonical float reduction order (Decision 14), and the frontier tie-break. It is server-side only: the client does not replay the build. Order is never derived from ids, map iteration, or filesystem order.
+- **Child order.** Children are an ordered sequence; the preorder DFS visits them in declaration order. This order defines node indices (wire identity, Decision 11), leaf order (CSR row order and the per-channel offset lists), the canonical float reduction order (Decision 14), and the frontier tie-break. It is server-side only: the client does not replay the build.
 - **Child enumeration.** Node shape: `subtree_size` (node count) and `child_count`. `first_child = index + 1` (parent-first preorder over emitted nodes; excluded childless groups never intervene) and `next_sibling = sibling + subtree_size` are derived, not stored. `deg(v)` is O(1), so the expansion-budget check `entries − 1 + deg(v) ≤ B` is O(1) even for a flat hierarchy with ~100k children; enumeration is O(deg) and only runs when `deg ≤ B`.
-- **Subtree-size units.** `subtree_size` is a node count. No per-node device-count extent is needed: aggregation reads per-channel offset lists (Decision 7), and visibility uses projected height and the entry budget.
+- **Subtree-size units.** `subtree_size` is a node count.
 - **Invariant.** Boot checks that `child_count` equals the emitted direct children and that `first_child = index + 1`; the contiguity scan confirms `subtree_size`.
+- **Alternatives rejected.** Order derived from ids, map iteration, or filesystem order; a stored per-node device-count extent — aggregation reads per-channel offset lists (Decision 7), and visibility uses projected height and the entry budget.
 
 ### Decision 9 — Config schema
 
@@ -769,8 +789,9 @@ The topology is a single JSON document (FR-TD-09) containing a flat list of node
 - **Wiring.** Metric→channel and channel→parent, both default none; fan-out and fan-in are allowed, and a channel may feed several parent channels (same reduction). A 17th channel is a boot error.
 - **Limits and absence.** Fixed named scale `normal`/`advisory`/`warning`/`critical`; a limit is `{threshold, side, level}` with the threshold in the value's unit, fired by `>=` (high) or `<=` (low), and a value's level is the max over fired limits; `absence` is per metric, default normal. Attention is stored as one `u8` per group and one per device in the double-buffered snapshot.
 - **Units.** Opaque strings compared by exact match.
-- **Format and templates.** JSON only. Shallow single-level templates (`group_types`): a group may reference one `type`, and a declared `channels` replaces the template's. No type-extends-type, no per-channel merge.
+- **Format and templates.** JSON only. Shallow single-level templates (`group_types`): a group may reference one `type`, and a declared `channels` replaces the template's.
 - **Validation order.** Template resolution precedes FR-TD-08 validation; diagnostics name the source (template or node).
+- **Alternatives rejected.** Type-extends-type inheritance and per-channel merge — templates stay shallow and single-level.
 
 ### Decision 10 — Index layout for channels/contributions; aggregation direction
 
@@ -779,7 +800,7 @@ Variable-length per-node data is held in global structure-of-arrays addressed by
 - **Arrays.** Node arrays carry `channel_base`/`channel_count`. A global **channel-def array** holds one entry per channel (`unit`, `reduction`, `epsilon`, `limit_base`, `limit_count`, `contrib_base`, `contrib_count`); a group's channels are contiguous. A global **limit array** holds `{threshold, side, level}`. A global **contribution array** holds one tagged entry per source: `seed` (source = state offset) or `merge` (source = contributing channel-def index).
 - **Pull.** The plan is the contribution array indexed by target channel: each channel lists its incoming sources. The reverse scan — bottom-up, single background thread, writing the write buffer — reduces each channel's list (seeds in device-leaf order, then merges in child order) and finalises it. This vectorises the reduction, gives an explicit canonical order for exact `sum`/`mean` (Decision 14), needs no pre-clear, and leaves the seed reduction parallelisable if the pass is ever split.
 - **Reserved attention.** One accumulator slot per group, outside the channel-def array; never a contribution target; computed from the group's channel limit levels, its direct devices' attention levels, and its children's attention channels.
-- **Push rejected.** The background-thread/bottom-up design removes push's only advantage (no cross-source races), leaving its serial read-modify-write chain; pull also avoids a pre-pass buffer clear and yields the canonical order.
+- **Alternatives rejected.** Push execution — the background-thread/bottom-up design removes push's only advantage (no cross-source races), leaving its serial read-modify-write chain; pull also avoids a pre-pass buffer clear and yields the canonical order.
 
 ### Decision 11 — Wire identity
 
@@ -788,47 +809,63 @@ The wire key is the server's flat-array node index; the client maps it to config
 - **Per-frame.** Entries and the per-session diff are keyed by the node index (u32), as in §9.3.
 - **Dictionary.** On (re)connect the server sends a dictionary mapping each node index to `(kind, config id)`. The client resolves position, units, metric labels, and channel meanings from the shared config (FR-TD-09). The dictionary is sent once per session, re-sent on reconnect, and may be delta/compressed.
 - **Client selection.** The client keys rendered instances by node index, so the inspection target (FR-VS-02) is sent as the node index.
-- **Restart / edit.** Indices are per-build; the topology is fixed while serving, so indices are stable within a session. Across a restart or a config edit a fresh dictionary is sent; no cross-restart stability is assumed, and no client index cache survives a reconnect.
+- **Restart / edit.** Indices are per-build; the topology is fixed while serving, so indices are stable within a session, and a fresh dictionary is sent across a restart or a config edit.
+- **Alternatives rejected.** Cross-restart index stability and a client index cache — a fresh dictionary is sent instead, and no cache survives a reconnect.
 
 ### Decision 12 — Hierarchy build details
 
-- **Leaf AABB.** A leaf's AABB is the device position (degenerate point); frustum tests are inclusive, and the brute-force reference uses the identical point test. No inflation. A leaf's projected height is degenerate, which is harmless: a device leaf is terminal by kind, and the size threshold only decides group blending.
+The hierarchy build is a single sequential pass over the resolved config, and validation runs fail-fast in six stages before serving.
+
+- **Leaf AABB.** A leaf's AABB is the device position (degenerate point); frustum tests are inclusive, and the brute-force reference uses the identical point test. There is no AABB inflation. A leaf's projected height is degenerate, which is harmless: a device leaf is terminal by kind, and the size threshold only decides group blending.
 - **Positions.** Non-finite positions (NaN/Inf) are rejected at boot; coincident positions are legal and separated by the node-id tie-break.
-- **Build parallelism.** The layout DFS is sequential — O(N) and not the K8 bottleneck. K8 is treated as a config-parse and validation budget; parsing is optimised (streaming) only if measurement demands it.
+- **Build parallelism.** The layout DFS is sequential — O(N) and not the K8 bottleneck. K8 is treated as a config-parse and validation budget.
 - **Validation.** Checks run on the resolved config in six stages — structural (FR-TD-07), device/metric (FR-TD-04), channels (FR-TD-05), contributions (FR-TD-06/08), limits/absence (FR-TD-11/08), post-build invariants (§5.3) — and are fail-fast: the first fault aborts boot with a structured diagnostic `{code, node id, metric label / channel id, message}`.
+- **Alternatives rejected.** A parallel layout DFS — the sequential walk is O(N) and not the K8 bottleneck; a pre-emptive streaming parse — parsing is optimised only if measurement demands it.
 
 ### Decision 13 — Benchmark host and topology
 
-Records FR-BR-05.
+The backend host spec is a field template recorded when the architecture is frozen and filled before the first benchmark run, and each tier's benchmark topology is produced by a deterministic, seeded generator and published with the report.
 
-- **Host.** The backend host spec is recorded as a field template (§14.1) when the architecture is frozen, with concrete values filled before the first benchmark run. The K5 raw baseline is fixed in PRD §7.1; performance numbers are produced by the benchmark runs of §14.
+**Implements:** PRD-001 FR-BR-05.
+
+- **Host.** The backend host spec is recorded as a field template (§14.1); the K5 raw baseline is fixed in PRD-001 §7.1, and performance numbers are produced by the benchmark runs of §14.
 - **Topology (FR-BR-05).** A deterministic, seeded generator (`bench-v1`) emits each tier's topology in the §4.1 schema, with fixed tier shapes (4,280 / 50,000 / 100,000 devices over 80 / 800 / 1,600 racks), a ~3-metric set, per-level channels with explicit contributions, grid positions, per-tier reading rates, and `group_types` templates. The generated file is versioned and published with the report.
+- **Alternatives rejected.** A hand-authored or per-run topology — the spec plus seed reproduce the published file exactly.
 
 ### Decision 14 — Canonical reduction order and SIMD
 
-- **Canonical order.** Sums use a blocked-lane order with fixed `W = 8`: source `i` accumulates into lane `i mod 8`, and the eight lanes fold in a fixed order. A channel's sources are already ordered (seeds by ascending state offset, then merges by child order, Decision 10), so the reduction is fully deterministic. The scalar engine and the brute-force reference implement the identical lane scheme and are therefore bit-exact; `min`/`max`/`count` are order-free, and the encode pipeline (f16 quantise, ε filter) is elementwise.
-- **SIMD.** Scalar is the default and the reference. SIMD for aggregation and encoding ships behind a feature flag, with the ship decision made from the K9 measurement; the scalar path remains authoritative.
+Sums use a fixed blocked-lane order with `W = 8`, so the scalar engine and the brute-force reference are bit-exact; scalar is the default and the reference, and SIMD ships behind a feature flag.
+
+- **Canonical order.** Source `i` accumulates into lane `i mod 8`, and the eight lanes fold in a fixed order. A channel's sources are already ordered (seeds by ascending state offset, then merges by child order, Decision 10), so the reduction is fully deterministic. `min`/`max`/`count` are order-free, and the encode pipeline (f16 quantise, ε filter) is elementwise.
+- **SIMD.** SIMD for aggregation and encoding ships behind a feature flag.
+- **Alternatives rejected.** SIMD as the default path — the scalar path remains authoritative, and the ship decision is made from the K9 measurement.
 
 ### Decision 15 — Transport encoding, keyframes, and egress
 
-- **Value encoding.** The wire carries the absolute f16 value for each changed slot; the last-sent baseline is only the ε-suppression reference. There are no numeric deltas, so there is no client-side accumulation drift — the displayed value is exactly the last-sent f16, within ε + f16 precision of current.
+The wire carries the absolute f16 value for each changed slot against a last-sent ε-suppression baseline, in a fixed little-endian frame layout, with a full keyframe on (re)connect and on-demand resync on a sequence gap.
+
+- **Value encoding.** The last-sent baseline is only the ε-suppression reference; the displayed value is exactly the last-sent f16, within ε + f16 precision of current.
 - **Frame layout.** Little-endian; a leading `u8 type`, then a header (sequence, flags, entry count), then entries keyed by node index (Decision 11), each with entry flags, a changed-slot mask, the included f16 values, and attention only when changed. The canonical unavailable marker is the quiet-NaN f16 pattern `0x7E00`.
-- **Keyframes.** Full visible keyframe on (re)connect; appeared entries sent in full on expansion or visibility change; on-demand resync when a client detects a sequence gap; no periodic keyframe.
+- **Keyframes.** Full visible keyframe on (re)connect; appeared entries sent in full on expansion or visibility change; on-demand resync when a client detects a sequence gap.
 - **Baseline and slow clients.** The baseline advances only on an actual socket write. Egress is latest-wins: a stale pending frame is replaced, and a dropped frame does not advance the baseline, so a client never decodes against a value it did not receive. Per-session state stays bounded by the current visible set plus the selected object.
+- **Alternatives rejected.** Numeric deltas — the wire carries absolute values, so there is no client-side accumulation drift; periodic keyframes — keyframes are sent only on (re)connect and on demand.
 
 ### Decision 16 — State-table concurrency
 
-- **Model.** Ingest writes each `(device, metric)` slot atomically and readers load the newest value; no lock is taken on either path, and the ingest path never queues.
-- **Back-pressure.** A saturated ingest overwrites stale values instead of buffering, which is what binds memory (FR-IS-05) and is the consequence K1 actually requires.
-- **Alternatives rejected.** A mutex or sharded-lock table would plausibly meet K1 (300,000 atomic stores/s is well within reach of coarser schemes), so lock-freedom is a preference rather than a necessity — it is recorded here rather than assumed in §2's goal table. An MPSC queue with bounded backlog was rejected because queued readings would age out of the freshness window (FR-IS-03) under load; per-viewer or per-request state tables were rejected as duplicated state.
+Ingest writes each `(device, metric)` slot atomically and readers load the newest value — no lock on either path and no queue on ingest.
+
+- **Back-pressure.** A saturated ingest overwrites stale values instead of buffering, which is what binds memory (FR-IS-05) and is the consequence K1 requires.
+- **Alternatives rejected.** A mutex or sharded-lock table would plausibly meet K1 (300,000 atomic stores/s is well within reach of coarser schemes), so lock-freedom is a preference rather than a necessity; an MPSC queue with bounded backlog — queued readings would age out of the freshness window (FR-IS-03) under load; per-viewer or per-request state tables — duplicated state.
 
 ### Decision 17 — Client rendering
 
-- **Model.** One `InstancedMesh` draws both device instances and blended group entries; per-frame instance transforms and colours are written into a pre-allocated VBO, so a frame performs no allocation and cannot stall on the heap (K6, K7, FR-CD-01).
-- **Why registered.** §2's K6/K7 rows name this mechanism as the design consequence; it is recorded here so the register covers every choice the goal table commits to.
-- **Alternatives rejected.** Per-object `Mesh` instances were rejected because 5,000 draw-object updates per frame make main-thread overhead scale with the visible set rather than stay under 3 ms (K6). Rebuilding the mesh per frame is kept only as the R4 fallback, not the primary path. A GPU-side transform buffer was deferred: it moves the same writes off-thread but complicates picking (FR-CD-04), and the VBO path already meets K6/K7 at the building tier.
+One `InstancedMesh` draws both device instances and blended group entries; per-frame instance transforms and colours are written into a pre-allocated VBO, so a frame performs no allocation and cannot stall on the heap (K6, K7, FR-CD-01).
+
+- **Alternatives rejected.** Per-object `Mesh` instances — 5,000 draw-object updates per frame make main-thread overhead scale with the visible set rather than stay under 3 ms (K6); a GPU-side transform buffer — deferred: it moves the same writes off-thread but complicates picking (FR-CD-04), and the VBO path already meets K6/K7 at the building tier; per-frame mesh rebuilding — kept only as the R4 fallback, not the primary path.
 
 ### Decision 18 — Technology stack
+
+The project uses one stack throughout: Rust server-side, Three.js over WebGL in the browser, WebSocket on the wire, and Vite/TypeScript for demo tooling.
 
 - **Language/runtime.** The engine, the simulator, and the benchmark harness are Rust; the demo application and client build use Vite and TypeScript.
 - **Client rendering.** Three.js over WebGL on the GPU-accelerated browser of PRD-001 §9, drawing through the `InstancedMesh` path of Decision 17.
