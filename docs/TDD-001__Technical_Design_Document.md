@@ -24,18 +24,18 @@ Guiding rule: **the browser draws; the server thinks.** All heavy work is perfor
 | --- | --- | --- |
 | Sustain ≥ 300,000 EPS for ≥ 30 min with stable memory (K1, G1) | Lock-free latest-wins state table and non-blocking ingest path (Decision 16); back-pressure by overwriting stale values rather than buffering, so memory stays bounded (FR-IS-05). | §14.3 |
 | Visibility query p99 ≤ 1.5 ms per viewer per 60 Hz frame at 100k, across all camera poses including max zoom-out; excludes encode, transport, and client (K2) | Constrained parent-first index; frustum pruning; heap-based best-first refinement. | §11, §14.3 |
-| ≤ 5,000 active entries per viewer per frame, worst case (K3, G2) | Per-frame entry budget enforced as a frontier cut size. | §13 |
+| ≤ 5,000 active entries per viewer per frame, worst case — an entry being a device instance or a blended group entry (K3, G2) | Per-frame entry budget enforced as a frontier cut size. | §13 |
 | Group aggregates match an exact reference; per-unit separation enforced (K4, G3) | Per-group local channels; one unit per channel, never mixed (FR-AG-02); same-reduction contributions; accumulator merge (`mean → (sum, count)`); brute-force scalar reference for tests. | §13 |
-| Egress ≤ 0.3 MB/s per client at 100k (≥ 99% cut); ≤ 0.15 MB/s at 50,000 (≥ 99%); ≤ 0.05 MB/s at 4,280 (≥ 98.5%) (K5, G4) | f16 quantisation + per-value ε filter (metric/channel) + change suppression. | §14.1, §14.3 |
-| Stable 60 FPS, main-thread overhead < 3 ms/frame (K6, G2) | InstancedMesh with a pre-allocated VBO; per-frame instance writes without allocation. | §11, §14.3 |
-| No monotonic heap growth in steady state; no allocation-driven frame spikes (K7) | Pre-allocated buffers; per-session state bounded (FR-TR-04). | §14.3 |
-| Boot ≤ 30 s at 100k (K8) | Sequential single-pass build; the budget is dominated by config parse and validation (Decision 12). | §14.3 |
+| Egress ≤ 0.3 MB/s per client at 100k (≥ 99% cut); ≤ 0.15 MB/s at 50,000 (≥ 99%); ≤ 0.05 MB/s at 4,280 (≥ 98.5%) — for the benchmark topology's configured channel set, including per-entry attention values (K5, G4) | f16 quantisation + per-value ε filter (metric/channel) + change suppression. | §14.1, §14.3 |
+| Stable 60 FPS, main-thread overhead < 3 ms/frame (K6, G2) | InstancedMesh with a pre-allocated VBO; per-frame instance writes without allocation (Decision 17). | §11, §14.3 |
+| No monotonic heap growth in steady state; no allocation-driven frame spikes (K7) | Pre-allocated buffers (Decision 17); per-session state bounded (FR-TR-04). | §14.3 |
+| Boot ≤ 30 s from topology file to fully loaded and serving at 100k devices (K8) | Sequential single-pass build; the budget is dominated by config parse and validation (Decision 12). | §14.3 |
 | ≤ 5 µs per channel per group with up to 1,000 contributing readings (K9) | Boot-recorded per-channel contribution offset lists walked as a bounded gather within the group's contiguous rows (Decision 7). | §11, §14.3 |
 | ≥ 10 concurrent browser sessions at 60 Hz at 100k devices; ≤ 50% aggregate server CPU; per-client egress within K5 (K10) | Aggregation pass independent of viewer count; per-viewer cost O(visible); per-session state bounded (FR-TR-04). | §14.3 |
-| Update freshness p99 ≤ 100 ms from a reading accepted by the engine to the rendered change in the client, at 60 Hz and the building scale (K11) | Stage budgets compose into an end-to-end path shorter than the freshness target. | §11, §14.3 |
+| Update freshness p99 ≤ 100 ms from a reading accepted by the engine to the rendered change in the client, at 60 Hz and the building scale (~4,280 devices) (K11) | Stage budgets compose into an end-to-end path shorter than the freshness target. | §11, §14.3 |
 | Same binary serves 4,280 and 100,000 devices with no code change (G5) | One config-driven engine with no scale-specific code paths; scale is a property of the topology, not of the code. | §14.3 |
 
-**Constraints (PRD-001 §9).** Key constraints carried from PRD-001 §9:
+**Constraints (PRD-001 §9).** Carried from PRD-001 §9:
 
 - **Language/runtime:** engine in Rust; browser client in Three.js.
 - **Browser capability:** a WebGL-capable browser on a mid-range laptop is the rendering target.
@@ -356,7 +356,7 @@ The semantic n-ary tree has no shared basis with a binary spatial BVH, so the `b
 - A channel combines one unit only (FR-AG-02), and unavailable (stale or offline) readings are excluded from the accumulation; a channel with no available contribution reports no value (FR-AG-04).
 - Results are published as a consistent per-frame snapshot (double-buffered internally); viewers read the published buffer (FR-AG-03).
 - Cost model: the shared pass is independent of viewer count; the per-viewer cost beyond it is **O(visible)**, not O(N) (R5, FR-AG-03).
-- Aggregates must match a brute-force reduction of the same contributions exactly (FR-AG-01, K4). Because floating-point addition is not associative, exact agreement requires a **canonical reduction order** shared by the scalar reference and any SIMD path: a **blocked-lane order with fixed `W = 8`** — source `i` accumulates into lane `i mod 8`, and the eight lanes fold in a fixed order (Decision 14). The scalar engine and the brute-force reference implement it identically, so they are bit-exact; a SIMD kernel reproduces the same lane pattern. `min`, `max` and `count` are order-free. A channel's reduction over up to 1,000 children targets ≤ 5 µs scalar (K9); the SIMD path aims for ≤ 1 µs as an engineering goal.
+- Aggregates must match a brute-force reduction of the same contributions exactly (FR-AG-01, K4). Because floating-point addition is not associative, exact agreement requires a **canonical reduction order** shared by the scalar reference and any SIMD path: a **blocked-lane order with fixed `W = 8`** — source `i` accumulates into lane `i mod 8`, and the eight lanes fold in a fixed order (Decision 14). The scalar engine and the brute-force reference implement it identically, so they are bit-exact; a SIMD kernel reproduces the same lane pattern. `min`, `max` and `count` are order-free. A channel's reduction over up to 1,000 contributing readings targets ≤ 5 µs scalar (K9); the SIMD path aims for ≤ 1 µs as an engineering goal.
 - Contingency: reduce the configured channel set if the shared pass cannot meet K9; per-viewer cost must stay independent of viewer count (FR-AG-03).
 
 ### 7.1 Attention channel (severity and absence)
@@ -523,7 +523,7 @@ The client loads the same topology definition as the server (FR-TD-09) to map in
 
 ### 10.1 Rendering
 
-- Three.js `InstancedMesh`; per-frame instance transforms and colours written into a pre-allocated VBO to avoid allocation-driven stalls (FR-CD-01, K7). Individual device instances and blended group entries are drawn from the same instanced buffers. Each instance's colour is derived from the selected display value (§10.4).
+- Three.js `InstancedMesh`; per-frame instance transforms and colours written into a pre-allocated VBO to avoid allocation-driven stalls (FR-CD-01, K7). Individual device instances and blended group entries are drawn from the same instanced buffers. Each instance's colour is derived from the selected display value (§10.4) (Decision 17).
 - Target: stable 60 FPS, main-thread overhead < 3 ms/frame (K6).
 - Fallback (R4): rebuild mesh per frame; drop LOD transitions.
 
@@ -634,8 +634,8 @@ The benchmark topology is produced by a **deterministic, seeded generator** (ver
 - Stress: ≥ 300,000 EPS for ≥ 30 min (K1).
 - Visibility latency: p99 ≤ 1.5 ms per viewer per 60 Hz frame at 100k, across camera poses including max zoom-out, engine instrumentation only (K2).
 - Boot: ≤ 30 s from topology file to fully loaded and serving at 100k devices (K8).
-- Concurrent-session run: ≥ 10 browser sessions at 60 Hz at the full-scale tier (100,000 devices); ≤ 50% aggregate CPU; per-client egress within K5 (K10).
-- Micro-benchmark: per-channel group aggregation (K9).
+- Concurrent-session run: ≥ 10 browser sessions at 60 Hz at the full-scale tier (100,000 devices); ≤ 50% aggregate server CPU — engine-process CPU across all its threads, summed and expressed as a fraction of total host capacity, taken as the mean over the steady-state window with the maximum reported alongside (K10); per-client egress within K5.
+- Micro-benchmark: per-channel group aggregation (K9). The measured channel is constructed with 1,000 contributing readings, since no channel of the benchmark topology reaches that fan-in — the widest is a rack channel at ~63 devices × 1 same-unit metric each ≈ 63 (§14.2, FR-AG-02) — so the ceiling is exercised synthetically, not sampled from the topology.
 - Ablation (FR-BR-03, Should): sibling ordering on/off (locality hypothesis; expected nil, since a parent's AABB is order-invariant); SIMD on/off for aggregation and encoding (informs the SIMD ship decision, Decision 14); ε suppression on/off (egress, K5).
 - Simulator pinned via `taskset`; non-blocking I/O; pre-generated traces as contingency (R6).
 
@@ -681,6 +681,7 @@ The benchmark topology is produced by a **deterministic, seeded generator** (ver
 | 14 | Canonical reduction order and SIMD | §7, §9.2 |
 | 15 | Transport encoding, keyframes, and egress | §9.2–§9.4 |
 | 16 | State-table concurrency: lock-free atomics, overwrite back-pressure | §2, §6 |
+| 17 | Client rendering: InstancedMesh over a pre-allocated VBO | §2, §10.1 |
 
 ### Decision 1 — Frontier ordering
 
@@ -825,3 +826,11 @@ Recorded in §2, §6.
 - **Model.** Ingest writes each `(device, metric)` slot atomically and readers load the newest value; no lock is taken on either path, and the ingest path never queues.
 - **Back-pressure.** A saturated ingest overwrites stale values instead of buffering, which is what binds memory (FR-IS-05) and is the consequence K1 actually requires.
 - **Alternatives rejected.** A mutex or sharded-lock table would plausibly meet K1 (300,000 atomic stores/s is well within reach of coarser schemes), so lock-freedom is a preference rather than a necessity — it is recorded here rather than assumed in §2's goal table. An MPSC queue with bounded backlog was rejected because queued readings would age out of the freshness window (FR-IS-03) under load; per-viewer or per-request state tables were rejected as duplicated state.
+
+### Decision 17 — Client rendering
+
+Recorded in §2, §10.1.
+
+- **Model.** One `InstancedMesh` draws both device instances and blended group entries; per-frame instance transforms and colours are written into a pre-allocated VBO, so a frame performs no allocation and cannot stall on the heap (K6, K7, FR-CD-01).
+- **Why registered.** §2's K6/K7 rows name this mechanism as the design consequence; it is recorded here so the register covers every choice the goal table commits to.
+- **Alternatives rejected.** Per-object `Mesh` instances were rejected because 5,000 draw-object updates per frame make main-thread overhead scale with the visible set rather than stay under 3 ms (K6). Rebuilding the mesh per frame is kept only as the R4 fallback, not the primary path. A GPU-side transform buffer was deferred: it moves the same writes off-thread but complicates picking (FR-CD-04), and the VBO path already meets K6/K7 at the building tier.
