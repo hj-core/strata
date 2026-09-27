@@ -14,53 +14,56 @@
 
 This document records and elaborates the design decisions for **how** the system is built: configuration schema and data model (§4), spatial index and aggregation (§5, §7), visibility selection (§8), transport and wire protocol (§9), client and simulator design (§4.2, §10), and testing and benchmark methodology (§13, §14). It addresses the requirements in PRD-001, its only upstream dependency; §16 maps each requirement area to its design section.
 
-Design scope follows PRD-001. Capabilities excluded there (PRD §10) — including field-protocol integration, telemetry persistence, statistical reductions beyond the supported set, alerting, federation, fraction-based coverage policy, explicit out-of-service signalling, occlusion, authentication and authorization, non-browser clients, and cloud deployment — remain out of scope here; PRD-001 §10 is authoritative.
+Design scope follows PRD-001. Capabilities excluded there (PRD-001 §10) — including field-protocol integration, telemetry persistence, statistical reductions beyond the supported set, alerting, federation, fraction-based coverage policy, explicit out-of-service signalling, occlusion, authentication and authorization, non-browser clients, and cloud deployment — remain out of scope here; PRD-001 §10 is authoritative.
 
 Guiding rule: **the browser draws; the server thinks.** All heavy work is performed once per frame on the server and shared across viewers; each viewer receives a small, relevant slice per frame.
 
-## 2. Design Goals and Constraints
+## 2. Design Goals, Constraints, and Technology Choices
 
 | Goal / target | Design consequence | Verified in |
 | --- | --- | --- |
 | Sustain ≥ 300,000 EPS for ≥ 30 min with stable memory (K1, G1) | Lock-free latest-wins state table and non-blocking ingest path (Decision 16); back-pressure by overwriting stale values rather than buffering, so memory stays bounded (FR-IS-05). | §14.3 |
-| Visibility query p99 ≤ 1.5 ms per viewer per 60 Hz frame at 100k, across all camera poses including max zoom-out; excludes encode, transport, and client (K2) | Constrained parent-first index; frustum pruning; heap-based best-first refinement. | §11, §14.3 |
-| ≤ 5,000 active entries per viewer per frame, worst case — an entry being a device instance or a blended group entry (K3, G2) | Per-frame entry budget enforced as a frontier cut size. | §13 |
-| Group aggregates match an exact reference; per-unit separation enforced (K4, G3) | Per-group local channels; one unit per channel, never mixed (FR-AG-02); same-reduction contributions; accumulator merge (`mean → (sum, count)`); brute-force scalar reference for tests. | §13 |
-| Egress ≤ 0.3 MB/s per client at 100k (≥ 99% cut); ≤ 0.15 MB/s at 50,000 (≥ 99%); ≤ 0.05 MB/s at 4,280 (≥ 98.5%) — for the benchmark topology's configured channel set, including per-entry attention values (K5, G4) | f16 quantisation + per-value ε filter (metric/channel) + change suppression. | §14.1, §14.3 |
+| Server-side visibility query p99 ≤ 1.5 ms per viewer per 60 Hz frame at 100k, across all camera poses, including max zoom-out; excludes encode, transport, and client (K2) | Constrained parent-first index; frustum pruning; heap-based best-first refinement (Decision 1). | §11, §14.3 |
+| ≤ 5,000 active entries per viewer per frame, worst case — an entry being a device instance or a blended group entry (K3, G2) | Per-frame entry budget enforced as a frontier cut size (Decision 1). | §13 |
+| Group aggregates match an exact reference; per-unit separation enforced (K4, G3) | Per-group local channels (Decision 4); one unit per channel, never mixed (FR-AG-02); same-reduction contributions; accumulator merge (`mean → (sum, count)`); brute-force scalar reference for tests (§13). | §13 |
+| Egress ≤ 0.3 MB/s per client at 100k (≥ 99% cut); ≤ 0.15 MB/s at 50,000 (≥ 99% cut); ≤ 0.05 MB/s at 4,280 (≥ 98.5% cut) — for the benchmark topology's configured channel set, including per-entry attention values (K5, G4) | f16 quantisation + per-value ε filter (metric/channel) + change suppression (Decision 15). | §14.1, §14.3 |
 | Stable 60 FPS, main-thread overhead < 3 ms/frame (K6, G2) | InstancedMesh with a pre-allocated VBO; per-frame instance writes without allocation (Decision 17). | §11, §14.3 |
 | No monotonic heap growth in steady state; no allocation-driven frame spikes (K7) | Pre-allocated buffers (Decision 17); per-session state bounded (FR-TR-04). | §14.3 |
 | Boot ≤ 30 s from topology file to fully loaded and serving at 100k devices (K8) | Sequential single-pass build; the budget is dominated by config parse and validation (Decision 12). | §14.3 |
 | ≤ 5 µs per channel per group with up to 1,000 contributing readings (K9) | Boot-recorded per-channel contribution offset lists walked as a bounded gather within the group's contiguous rows (Decision 7). | §11, §14.3 |
-| ≥ 10 concurrent browser sessions at 60 Hz at 100k devices; ≤ 50% aggregate server CPU; per-client egress within K5 (K10) | Aggregation pass independent of viewer count; per-viewer cost O(visible); per-session state bounded (FR-TR-04). | §14.3 |
+| ≥ 10 concurrent browser sessions at 60 Hz at 100k devices; ≤ 50% aggregate server CPU; per-client egress within K5 (K10) | Aggregation pass independent of viewer count (Decision 5); per-viewer cost O(visible); per-session state bounded (FR-TR-04). | §14.3 |
 | Update freshness p99 ≤ 100 ms from a reading accepted by the engine to the rendered change in the client, at 60 Hz and the building scale (~4,280 devices) (K11) | Stage budgets compose into an end-to-end path shorter than the freshness target. | §11, §14.3 |
-| Same binary serves 4,280 and 100,000 devices with no code change (G5) | One config-driven engine with no scale-specific code paths; scale is a property of the topology, not of the code. | §14.3 |
+| Same binary serves 4,280 and 100,000 devices with no code change (G5) | One config-driven engine with no scale-specific code paths; scale is a property of the topology, not of the code (Decision 9). | §14.3 |
 
-**Constraints (PRD-001 §9).** Carried from PRD-001 §9:
+**Measurement scope (PRD-001 §7).** Product targets (K1–K5, K8–K10) are measured on the fixed benchmark host: K1, K2, K8, and K10 are defined at the full-scale tier (100,000 devices); K5 gives a target for each tier; K3, K4, and K9 are tier-independent. Showcase targets (K6, K7, K11) are measured in the demo application on a mid-range laptop at the building scale (~4,280 devices).
 
-- **Browser capability:** a WebGL-capable browser on a mid-range laptop is the rendering target.
+**Constraints (PRD-001 §9).**
+
+- **Browser capability:** a GPU-accelerated browser on a mid-range laptop is the rendering target.
 - **Transport:** one persistent connection per viewer (FR-TR-01).
-- **Scope tiers:** 4,280 / 50,000 / 100,000 devices are all in scope; the demonstration application targets the building tier (~4,280 devices); the tier set is reduced only by an explicit, versioned amendment (PRD §12, R8).
-- **Scale unit:** scale is counted in devices (the leaves of the hierarchy); memory and compute also depend on metrics per device and the reading rate.
+- **Scope tiers:** 4,280 / 50,000 / 100,000 devices are deliberately demanding and testable figures, not measurements from a field study; all three tiers are in scope — the benchmark harness exercises all three, while the demonstration application targets the building tier (~4,280 devices); the tier set is reduced only by an explicit, versioned amendment (PRD-001 §12, R8).
+- **Scale unit:** scale is counted in devices (the leaves of the hierarchy); memory and compute also depend on metrics per device and the reading rate (see PRD-001 §7.1).
 - **Benchmark host:** a single fixed host, specified before benchmarking begins.
-- **Measurement environment:** simulator, engine, and harness run on the fixed host with browsers on the same local network; the demonstration runs the engine and browser together on the laptop; wide-area network behaviour is out of scope.
+- **Measurement environment:** simulator, engine, and harness run on the fixed host with browsers on the same local network; the demonstration runs the engine and browser together on the mid-range laptop; wide-area network behaviour is out of scope.
 - **Topology stability:** fixed at boot, not modified while serving.
-- **LOD granularity:** level of detail depends on intermediate groups; a flat hierarchy still meets K3 but collapses to large blended entries when zoomed out.
+- **LOD granularity:** level-of-detail depends on intermediate groups; a flat hierarchy still meets K3 but collapses to large blended entries when zoomed out.
 - **Deployment:** no production deployment is assumed.
 
 PRD-001 §9 is authoritative for these constraints.
 
-**Technology choices (this document).** PRD-001 does not prescribe implementation (§1), so the technology is chosen here:
+**Technology choices (this document).** PRD-001 does not prescribe implementation (PRD-001 §1), so the technology is chosen here:
 
-- **Language/runtime:** engine in Rust; browser client in Three.js (§16).
-- **Wire protocol:** WebSocket with a compact binary frame format (§9.1).
+- **Language/runtime:** engine in Rust; browser client in Three.js (§15, Decision 18).
+- **Rendering API:** WebGL on the GPU-accelerated browser of PRD-001 §9 (Decision 18).
+- **Wire protocol:** WebSocket with a compact binary frame format (§9.1, Decision 18).
 
 ## 3. Architecture Overview
 
 The system comprises a server process and a browser client, supported by three additional programs: the simulator, the demo application, and the benchmark harness.
 
-- **Server (Rust).** Owns the state table and the hierarchical spatial index, and runs every stage of the pipeline: telemetry ingest, index build, shared aggregation, per-viewer visibility query, per-viewer encode, and WebSocket transport. All heavy work happens here, once per frame, shared across viewers.
-- **Browser client (Three.js).** Renders the entries the server selects, using an `InstancedMesh` over a pre-allocated VBO, and reports back its camera pose and screen geometry every frame, and its selected object and each deselection on change.
-- **Supporting programs.** The simulator (Rust binary) feeds ingest; the demo application (Vite/TS) wires simulator → engine → browser; the benchmark harness measures the KPIs (§14).
+- **Server (Rust).** Owns the state table and the hierarchical spatial index, and runs every stage of the pipeline: telemetry ingest, index build, shared aggregation, per-viewer visibility query, per-viewer encode, and WebSocket transport. All heavy work happens here, once per frame, shared across viewers (Decision 18).
+- **Browser client (Three.js).** Renders the entries the server selects, using an `InstancedMesh` over a pre-allocated VBO, and reports back its camera pose and screen geometry every frame, and its selected object and each deselection on change (Decision 18).
+- **Supporting programs.** The simulator (Rust binary) feeds ingest; the demo application (Vite/TS) wires simulator → engine → browser; the benchmark harness measures the KPIs (§14). The stack for all three is fixed by Decision 18.
 
 Component responsibilities and PRD-001 coverage are given in §3.1. The order in which the stages execute — the boot path, the ingest path, the frame path, and both client feedback loops — is given as a numbered sequence in §3.2.
 
@@ -70,25 +73,25 @@ Each row lists the component's primary PRD-001 coverage; a requirement that span
 
 | Component | Responsibility | PRD coverage |
 | --- | --- | --- |
-| Simulator | Generate topology-driven telemetry at configurable rates from the shared topology. | FR-TD-09, FR-CD-07 |
+| Simulator | Generate topology-driven telemetry at configurable rates from the shared topology. | FR-TD-09, FR-CD-07, FR-CD-09 |
 | Ingestor | Accept readings; apply latest-wins to the state table; reject invalid readings; sustain the offered stream without unbounded buffering. | FR-IS-01, FR-IS-02, FR-IS-05, FR-CD-09 |
-| State table | Hold exactly one current value per (device, metric) with its availability; device-major layout per §4.4. | FR-IS-01, FR-IS-03, FR-IS-04 |
-| Index builder | Load and validate the topology; build the hierarchical spatial index; bind metric labels to per-device slots. | FR-TD-01–FR-TD-04, FR-TD-07–FR-TD-09, FR-TD-10 |
+| State table | Hold exactly one current value per (device, metric) with its availability; device-major layout per §4.4. | FR-IS-01, FR-IS-03, FR-IS-04, FR-CD-09 |
+| Index builder | Load and validate the topology; build the hierarchical spatial index; bind metric labels to per-device slots. | FR-TD-01–FR-TD-11, FR-CD-09 |
 | Aggregator | Compute each group's channels and attention value once per frame from device readings and child-channel contributions; double-buffered. | FR-TD-05, FR-TD-06, FR-TD-10, FR-TD-11, FR-AG-01–FR-AG-06, FR-CD-09 |
-| Visibility engine | Accept camera context and selection; frustum-cull and best-first refine the hierarchy into a bounded entry cut. | FR-VS-01–FR-VS-08, FR-TD-10 |
-| Encoder | Quantise, ε-filter, and suppress unchanged values per viewer; stream the selected object at full fidelity. | FR-TR-02, FR-VS-02 |
-| Transport | WebSocket server + binary framing + sessions; ingress for camera context and inspection target. | FR-TR-01, FR-TR-03, FR-TR-04, FR-CD-09 |
-| Client SDK | Render instances, publish camera, pick objects, select display value; load the shared topology. | FR-CD-01–FR-CD-06, FR-TD-09 |
+| Visibility engine | Accept camera context and selection; frustum-cull and best-first refine the hierarchy into a bounded entry cut. | FR-VS-01–FR-VS-08, FR-TD-10, FR-CD-09 |
+| Encoder | Quantise, ε-filter, and suppress unchanged values per viewer; stream the selected object at full fidelity. | FR-TR-02, FR-VS-02, FR-CD-09 |
+| Transport | WebSocket server + binary framing + sessions; ingress for camera context and inspection target. | FR-TR-01, FR-TR-03, FR-TR-04, FR-VS-01, FR-VS-02, FR-CD-09 |
+| Browser 3D client | Render instances, publish camera, pick objects, select display value; load the shared topology. | FR-CD-01–FR-CD-06, FR-CD-09, FR-TD-09 |
 | Demo app | Wire simulator → engine → browser at the building scale (~4,280 devices). | FR-CD-08, FR-CD-09 |
 | Benchmark harness | Produce the fixed benchmark topology; measure and report KPIs. | FR-BR-01–FR-BR-05 |
 
 ### 3.2 End-to-End Data Flow
 
-Three paths precede or run alongside the frame: the **boot path**, which runs once before serving, the **ingest path**, which runs continuously and asynchronously to the frame, and the **frame path**, which runs once per 60 Hz cycle. The client closes the loop through two feedback inputs.
+Three paths make up the pipeline: the **boot path**, which runs once before serving; the **ingest path**, which runs continuously and asynchronously to the frame; and the **frame path**, which runs once per 60 Hz cycle. The client closes the loop through two feedback inputs.
 
 **Boot path — once, before serving**
 
-1. The topology config is loaded and validated, the hierarchical spatial index is built, metric labels are bound to per-device slots, and each channel's contribution list is compiled (§5.2, §5.3). The topology is then fixed until restart (FR-TD-07, FR-TD-08). Nothing below repeats on a restart-free server.
+1. The topology config is loaded and validated, the hierarchical spatial index is built, metric labels are bound to per-device slots, and each channel's contribution list is compiled (§5.2, §5.3). The topology is then fixed until restart (FR-TD-07, FR-TD-08). This boot step runs once and does not repeat on a restart-free server.
 
 **Ingest path — continuous, not frame-bound**
 
@@ -514,7 +517,7 @@ InspectionTarget (client → server, type = 2):  # on selection change
 
 The dictionary maps each node index to its kind and config id; the client resolves positions, units, metric labels, and channel meanings from the shared config (FR-TD-09, Decision 11). The camera context is sent every frame (FR-CD-06); the inspection target only on change (FR-VS-02).
 
-## 10. Client SDK Design
+## 10. Browser 3D Client Design
 
 The client and demo target the building tier (~4,280 devices). Browser KPIs K6 (frame rate) and K7 (memory) are verified at that scale; the engine itself is benchmarked across all three tiers (§14).
 
@@ -667,24 +670,25 @@ The benchmark topology is produced by a **deterministic, seeded generator** (ver
 | 1 | One hierarchy serves both visibility and aggregation; frontier ordered by exact projected height | §2, §8.2–§8.4, §13 |
 | 2 | Aggregation by accumulator propagation over per-group channels | §7 (see Decision 4) |
 | 3 | Stateful per-viewer change suppression | §9 (Decision 15) |
-| 4 | Per-group local channels with explicit contributions | §3.1, §4.1, §4.4, §5.2, §6, §7 |
-| 5 | Aggregation execution: always-on 60 Hz background pass | §7 |
+| 4 | Per-group local channels with explicit contributions | §2, §3.1, §4.1, §4.4, §5.2, §6, §7 |
+| 5 | Aggregation execution: always-on 60 Hz background pass | §2, §7 |
 | 6 | Attention channel (severity and absence) | §3.1, §4.4, §7.1, §9.2, §9.3, §13 |
-| 7 | Metric identity and state layout: device-local labels, per-device instances, device-major state | §4.1, §4.2, §4.4, §5.2, §5.3, §6; amends FR-TD-04/FR-TD-08 |
+| 7 | Metric identity and state layout: device-local labels, per-device instances, device-major state | §2, §4.1, §4.2, §4.4, §5.2, §5.3, §6; amends FR-TD-04/FR-TD-08 |
 | 8 | Canonical child order and child enumeration | §4.4, §5.2, §5.3, §8.2 |
-| 9 | Config schema: JSON flat node list, explicit fields, shallow templates | §4.1, §5.2 |
-| 10 | Index layout for channel definitions and contributions; aggregation direction | §4.4, §7 |
+| 9 | Config schema: JSON flat node list, explicit fields, shallow templates | §2, §4.1, §5.2 |
+| 10 | Index layout for channel definitions and contributions; aggregation direction | §3.2, §4.4, §7 |
 | 11 | Wire identity | §8.2, §9.3 |
 | 12 | Hierarchy build details | §2, §5.2–§5.4 |
 | 13 | Benchmark host spec and fixed benchmark topology | §14; records FR-BR-05 |
 | 14 | Canonical reduction order and SIMD | §7, §9.2 |
-| 15 | Transport encoding, keyframes, and egress | §9.2–§9.4 |
+| 15 | Transport encoding, keyframes, and egress | §2, §9.2–§9.4 |
 | 16 | State-table concurrency: lock-free atomics, overwrite back-pressure | §2, §6 |
 | 17 | Client rendering: InstancedMesh over a pre-allocated VBO | §2, §10.1 |
+| 18 | Technology stack: Rust engine, simulator, and harness; Three.js client over WebGL; WebSocket binary transport; Vite/TypeScript demo tooling | §2, §3, §9.1, §15 |
 
 ### Decision 1 — Frontier ordering
 
-The frontier is a fixed-capacity **max-heap keyed on exact projected on-screen height**, with node id as the terminal tie-break. Recorded in §2, §8.2, §8.3, §8.4, §13.
+The frontier is a fixed-capacity **max-heap keyed on exact projected on-screen height**, with node id as the terminal tie-break.
 
 - The hierarchy is the single structure driving visibility and aggregation; the state table is a separate flat value store aligned to leaf order.
 - Exact height is the primary key; no bucket size-error bound or bucket-width parameter applies.
@@ -694,15 +698,15 @@ The frontier is a fixed-capacity **max-heap keyed on exact projected on-screen h
 
 ### Decision 2 — Accumulator propagation
 
-Resolved by Decision 4. One shared 60 Hz pass computes each group's local channels by accumulator propagation over its configured contributions (its own device readings and its child groups' contributed channels), with mergeable accumulators (`mean → (sum, count)`), exact over the subtree, published as a consistent per-frame snapshot. Recorded in §7. Alternatives rejected: incremental push-up on ingest; per-viewer or per-request aggregation; event-driven recomputation; GPU/compute offload; alternative state layouts.
+Resolved by Decision 4. One shared 60 Hz pass computes each group's local channels by accumulator propagation over its configured contributions (its own device readings and its child groups' contributed channels), with mergeable accumulators (`mean → (sum, count)`), exact over the subtree, published as a consistent per-frame snapshot. Alternatives rejected: incremental push-up on ingest; per-viewer or per-request aggregation; event-driven recomputation; GPU/compute offload; alternative state layouts.
 
 ### Decision 3 — Stateful per-viewer change suppression
 
-One persistent session per viewer; each frame reconciles the visible set against the previous frame (appeared → full value, removed → prune, otherwise changed slots as absolute f16, ε-filtered in the wire domain); the selected object is streamed at full fidelity; full keyframe on (re)connect; per-session state bounded with latest-wins on egress. Resolved by Decision 15 (the baseline commits on an actual socket write; a dropped frame does not advance it). Recorded in §9.
+One persistent session per viewer; each frame reconciles the visible set against the previous frame (appeared → full value, removed → prune, otherwise changed slots as absolute f16, ε-filtered in the wire domain); the selected object is streamed at full fidelity; full keyframe on (re)connect; per-session state bounded with latest-wins on egress. Resolved by Decision 15 (the baseline commits on an actual socket write; a dropped frame does not advance it).
 
 ### Decision 4 — Group channel model
 
-Each group node defines its own local channels — up to 16, in addition to its attention value — whose meaning is local to that group, and configures which of its channels contribute to which of its parent's channels. Recorded in §3.1, §4.1, §4.4, §5.2, §6, §7; PRD FR-TD-05/06/08, FR-AG-01.
+Each group node defines its own local channels — up to 16, in addition to its attention value — whose meaning is local to that group, and configures which of its channels contribute to which of its parent's channels. Implements PRD FR-TD-05/06/08, FR-AG-01.
 
 - **Local channel identity.** A channel's meaning is local to its group; there is no site-wide channel catalogue. The engine validates units per configured contribution; the client resolves a group entry's channel meanings per group.
 - **Explicit contributions, default none.** A group contributes nothing to its parent unless configured (FR-TD-06).
@@ -716,7 +720,7 @@ The reserved attention channel is not addressable in configured contributions �
 
 ### Decision 5 — Aggregation execution
 
-One background pass at 60 Hz computes every group bottom-up from a **boot-built compiled plan** (seed ops: device metric → channel; merge ops: child channel → parent channel), with accumulator layout and reduction order fixed at boot. The pass runs continuously, independent of viewer count. Recorded in §7.
+One background pass at 60 Hz computes every group bottom-up from a **boot-built compiled plan** (seed ops: device metric → channel; merge ops: child channel → parent channel), with accumulator layout and reduction order fixed at boot. The pass runs continuously, independent of viewer count.
 
 - Freshness is re-evaluated every pass; aggregates change without ingest as metrics cross their freshness timeout (FR-IS-03).
 - Bottom-up is a reverse linear scan of the parent-first index; no recursion is required.
@@ -726,7 +730,7 @@ One background pass at 60 Hz computes every group bottom-up from a **boot-built 
 
 ### Decision 6 — Attention channel (severity and absence)
 
-Each group carries a reserved unitless attention channel (reduction `max`) on the fixed severity scale (normal, advisory, warning, critical), computed by the aggregation pass and streamed per entry; a device's attention level is the greatest of its metrics' contributions. Recorded in §3.1, §4.4, §7.1, §9.2, §9.3, §13; PRD FR-TD-11, FR-AG-06, FR-CD-03.
+Each group carries a reserved unitless attention channel (reduction `max`) on the fixed severity scale (normal, advisory, warning, critical), computed by the aggregation pass and streamed per entry; a device's attention level is the greatest of its metrics' contributions. Implements PRD FR-TD-11, FR-AG-06, FR-CD-03.
 
 - Value severity is derived from limits on metrics and channels, evaluated as the maximum over crossed limits; limits inherit the value's unit.
 - Absence severity is per metric: a metric contributes its configured absence level while it is unavailable; `0` is permitted. A per-device override is not adopted (it could be added later as a raise-only field).
@@ -737,7 +741,7 @@ Each group carries a reserved unitless attention channel (reduction `max`) on th
 
 ### Decision 7 — Metric identity and state layout
 
-Metric identity is the per-device instance `(device, label)`; labels are chosen freely by each device and need only be unique within it. There is no site-wide metric vocabulary and no global kind slot. Recorded in §4.1, §4.2, §4.4, §5.2, §5.3, §6; implements PRD FR-TD-04/FR-TD-08.
+Metric identity is the per-device instance `(device, label)`; labels are chosen freely by each device and need only be unique within it. There is no site-wide metric vocabulary and no global kind slot. Implements PRD FR-TD-04/FR-TD-08.
 
 - **Identity.** A reading names `(device_id, metric_label)`; the label binds at boot to a per-device `metric_slot`. A slot is meaningful only within its device, so there is no global metric column.
 - **Typing.** Each metric instance declares its own unit and attributes (ε, freshness, limits, absence, contributions). The engine consumes **unit**, not the label and not any separate `quantity` concept; no channel combines contributors of different units (FR-AG-02).
@@ -748,7 +752,7 @@ Metric identity is the per-device instance `(device, label)`; labels are chosen 
 
 ### Decision 8 — Canonical child order and child enumeration
 
-Canonical child order is the order in which children are declared in the config, and the index carries a per-node child count for O(1) degree. Recorded in §4.4, §5.2, §5.3, §8.2.
+Canonical child order is the order in which children are declared in the config, and the index carries a per-node child count for O(1) degree.
 
 - **Child order.** Children are an ordered sequence; the preorder DFS visits them in declaration order. This order defines node indices (wire identity, Decision 11), leaf order (CSR row order and the per-channel offset lists), the canonical float reduction order (Decision 14), and the frontier tie-break. It is server-side only: the client does not replay the build. Order is never derived from ids, map iteration, or filesystem order.
 - **Child enumeration.** Node shape: `subtree_size` (node count) and `child_count`. `first_child = index + 1` (parent-first preorder over emitted nodes; excluded childless groups never intervene) and `next_sibling = sibling + subtree_size` are derived, not stored. `deg(v)` is O(1), so the expansion-budget check `entries − 1 + deg(v) ≤ B` is O(1) even for a flat hierarchy with ~100k children; enumeration is O(deg) and only runs when `deg ≤ B`.
@@ -757,7 +761,7 @@ Canonical child order is the order in which children are declared in the config,
 
 ### Decision 9 — Config schema
 
-The topology is a single JSON document (FR-TD-09) containing a flat list of nodes with parent references; list order is canonical sibling order. Recorded in §4.1, §5.2.
+The topology is a single JSON document (FR-TD-09) containing a flat list of nodes with parent references; list order is canonical sibling order. The engine is one config-driven binary with no scale-specific code paths — scale is a property of the topology, not of the code (§2, G5).
 
 - **Hierarchy.** A flat `nodes` array; each node has `kind` (`group`/`device`), `id` (topology-unique), and `parent` (null for the single root). A pre-pass resolves templates, buckets children by parent in list order, and validates the tree; the preorder DFS then runs in that order.
 - **Metrics.** Per metric instance: `label` (device-local, unique), `unit`, `epsilon`, and `freshness_ms` are required; `contributes_to`, `limits`, and `absence` are optional (default none / none / normal).
@@ -770,7 +774,7 @@ The topology is a single JSON document (FR-TD-09) containing a flat list of node
 
 ### Decision 10 — Index layout for channels/contributions; aggregation direction
 
-Variable-length per-node data is held in global structure-of-arrays addressed by ranges, and the aggregation plan is indexed by target channel and executed as a pull. Recorded in §4.4, §7.
+Variable-length per-node data is held in global structure-of-arrays addressed by ranges, and the aggregation plan is indexed by target channel and executed as a pull.
 
 - **Arrays.** Node arrays carry `channel_base`/`channel_count`. A global **channel-def array** holds one entry per channel (`unit`, `reduction`, `epsilon`, `limit_base`, `limit_count`, `contrib_base`, `contrib_count`); a group's channels are contiguous. A global **limit array** holds `{threshold, side, level}`. A global **contribution array** holds one tagged entry per source: `seed` (source = state offset) or `merge` (source = contributing channel-def index).
 - **Pull.** The plan is the contribution array indexed by target channel: each channel lists its incoming sources. The reverse scan — bottom-up, single background thread, writing the write buffer — reduces each channel's list (seeds in device-leaf order, then merges in child order) and finalises it. This vectorises the reduction, gives an explicit canonical order for exact `sum`/`mean` (Decision 14), needs no pre-clear, and leaves the seed reduction parallelisable if the pass is ever split.
@@ -779,7 +783,7 @@ Variable-length per-node data is held in global structure-of-arrays addressed by
 
 ### Decision 11 — Wire identity
 
-The wire key is the server's flat-array node index; the client maps it to config identities through a connect-time dictionary. Recorded in §8.2, §9.3.
+The wire key is the server's flat-array node index; the client maps it to config identities through a connect-time dictionary.
 
 - **Per-frame.** Entries and the per-session diff are keyed by the node index (u32), as in §9.3.
 - **Dictionary.** On (re)connect the server sends a dictionary mapping each node index to `(kind, config id)`. The client resolves position, units, metric labels, and channel meanings from the shared config (FR-TD-09). The dictionary is sent once per session, re-sent on reconnect, and may be delta/compressed.
@@ -788,8 +792,6 @@ The wire key is the server's flat-array node index; the client maps it to config
 
 ### Decision 12 — Hierarchy build details
 
-Recorded in §2, §5.2, §5.3, §5.4.
-
 - **Leaf AABB.** A leaf's AABB is the device position (degenerate point); frustum tests are inclusive, and the brute-force reference uses the identical point test. No inflation. A leaf's projected height is degenerate, which is harmless: a device leaf is terminal by kind, and the size threshold only decides group blending.
 - **Positions.** Non-finite positions (NaN/Inf) are rejected at boot; coincident positions are legal and separated by the node-id tie-break.
 - **Build parallelism.** The layout DFS is sequential — O(N) and not the K8 bottleneck. K8 is treated as a config-parse and validation budget; parsing is optimised (streaming) only if measurement demands it.
@@ -797,21 +799,17 @@ Recorded in §2, §5.2, §5.3, §5.4.
 
 ### Decision 13 — Benchmark host and topology
 
-Records FR-BR-05. Recorded in §14.
+Records FR-BR-05.
 
 - **Host.** The backend host spec is recorded as a field template (§14.1) when the architecture is frozen, with concrete values filled before the first benchmark run. The K5 raw baseline is fixed in PRD §7.1; performance numbers are produced by the benchmark runs of §14.
 - **Topology (FR-BR-05).** A deterministic, seeded generator (`bench-v1`) emits each tier's topology in the §4.1 schema, with fixed tier shapes (4,280 / 50,000 / 100,000 devices over 80 / 800 / 1,600 racks), a ~3-metric set, per-level channels with explicit contributions, grid positions, per-tier reading rates, and `group_types` templates. The generated file is versioned and published with the report.
 
 ### Decision 14 — Canonical reduction order and SIMD
 
-Recorded in §7, §9.2, §13.
-
 - **Canonical order.** Sums use a blocked-lane order with fixed `W = 8`: source `i` accumulates into lane `i mod 8`, and the eight lanes fold in a fixed order. A channel's sources are already ordered (seeds by ascending state offset, then merges by child order, Decision 10), so the reduction is fully deterministic. The scalar engine and the brute-force reference implement the identical lane scheme and are therefore bit-exact; `min`/`max`/`count` are order-free, and the encode pipeline (f16 quantise, ε filter) is elementwise.
 - **SIMD.** Scalar is the default and the reference. SIMD for aggregation and encoding ships behind a feature flag, with the ship decision made from the K9 measurement; the scalar path remains authoritative.
 
 ### Decision 15 — Transport encoding, keyframes, and egress
-
-Recorded in §9.2–§9.4.
 
 - **Value encoding.** The wire carries the absolute f16 value for each changed slot; the last-sent baseline is only the ε-suppression reference. There are no numeric deltas, so there is no client-side accumulation drift — the displayed value is exactly the last-sent f16, within ε + f16 precision of current.
 - **Frame layout.** Little-endian; a leading `u8 type`, then a header (sequence, flags, entry count), then entries keyed by node index (Decision 11), each with entry flags, a changed-slot mask, the included f16 values, and attention only when changed. The canonical unavailable marker is the quiet-NaN f16 pattern `0x7E00`.
@@ -820,16 +818,19 @@ Recorded in §9.2–§9.4.
 
 ### Decision 16 — State-table concurrency
 
-Recorded in §2, §6.
-
 - **Model.** Ingest writes each `(device, metric)` slot atomically and readers load the newest value; no lock is taken on either path, and the ingest path never queues.
 - **Back-pressure.** A saturated ingest overwrites stale values instead of buffering, which is what binds memory (FR-IS-05) and is the consequence K1 actually requires.
 - **Alternatives rejected.** A mutex or sharded-lock table would plausibly meet K1 (300,000 atomic stores/s is well within reach of coarser schemes), so lock-freedom is a preference rather than a necessity — it is recorded here rather than assumed in §2's goal table. An MPSC queue with bounded backlog was rejected because queued readings would age out of the freshness window (FR-IS-03) under load; per-viewer or per-request state tables were rejected as duplicated state.
 
 ### Decision 17 — Client rendering
 
-Recorded in §2, §10.1.
-
 - **Model.** One `InstancedMesh` draws both device instances and blended group entries; per-frame instance transforms and colours are written into a pre-allocated VBO, so a frame performs no allocation and cannot stall on the heap (K6, K7, FR-CD-01).
 - **Why registered.** §2's K6/K7 rows name this mechanism as the design consequence; it is recorded here so the register covers every choice the goal table commits to.
 - **Alternatives rejected.** Per-object `Mesh` instances were rejected because 5,000 draw-object updates per frame make main-thread overhead scale with the visible set rather than stay under 3 ms (K6). Rebuilding the mesh per frame is kept only as the R4 fallback, not the primary path. A GPU-side transform buffer was deferred: it moves the same writes off-thread but complicates picking (FR-CD-04), and the VBO path already meets K6/K7 at the building tier.
+
+### Decision 18 — Technology stack
+
+- **Language/runtime.** The engine, the simulator, and the benchmark harness are Rust; the demo application and client build use Vite and TypeScript.
+- **Client rendering.** Three.js over WebGL on the GPU-accelerated browser of PRD-001 §9, drawing through the `InstancedMesh` path of Decision 17.
+- **Transport.** WebSocket carrying a compact binary frame format (§9.1), one persistent session per viewer (FR-TR-01).
+- **Alternatives rejected.** A garbage-collected server runtime — pause-time risk against the K2 and K9 budgets; a native or non-browser client — out of scope (PRD-001 §10); HTTP request/response or raw TCP — no persistent bidirectional session, contrary to FR-TR-01.
