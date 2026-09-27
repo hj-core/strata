@@ -149,6 +149,14 @@ The topology is a single JSON document (FR-TD-09): a **flat list of nodes**, eac
 }
 ```
 
+**Document fields.**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `version` | yes | schema version of the document; currently `1` |
+| `group_types` | no | named shallow channel templates referenced by a node's `type` (Decision 9) |
+| `nodes` | yes | flat list of nodes (Decision 9) |
+
 **Node fields.**
 
 | Field | Required | Notes |
@@ -179,13 +187,13 @@ The topology is a single JSON document (FR-TD-09): a **flat list of nodes**, eac
 | --- | --- | --- |
 | `id` | yes | unique within the group |
 | `reduction` | yes | `sum`, `mean`, `min`, `max`, `count` |
-| `unit` | yes | contributors must match (FR-AG-02); for `count`, the unit of the readings tallied |
+| `unit` | yes | contributors match (FR-AG-02); for `count`, the unit of the readings tallied |
 | `epsilon` | yes | noise threshold |
 | `contributes_to` | no (default `[]`) | parent group's channel ids; may name several |
 | `limits` | no (default `[]`) | ordered `{threshold, side, level}` |
 
 Configuration requirements:
-- **Single-rooted.** Exactly one node has `parent: null`; every other `parent` resolves; there are no cycles; every device is reachable from the root; ids are unique (FR-TD-07).
+- **Single-rooted.** Exactly one node has `parent: null`; every other `parent` resolves; there are no cycles; every device is reachable from the root; ids are unique. Groups may be empty; a childless group is excluded from the index at runtime (§4.4), not at boot (FR-TD-07).
 - Every device has a fixed, finite position and one or more metrics, each with a **device-local `label`** unique within the device; labels are not a shared vocabulary (FR-TD-03/04, Decision 7).
 - A group defines at most 16 channels, in addition to its reserved attention channel; a 17th is a boot error (FR-TD-05).
 - A metric contributes to channels of its containing group; a channel contributes to channels of its immediate parent. Both default to none. Fan-out and fan-in are allowed, and a channel may feed several parent channels (FR-TD-04/06, Decision 9).
@@ -218,20 +226,20 @@ Fields derived from the topology — position, unit, epsilon, group ids — are 
 
 The simulator emits this record in the engine's ingest format directly. There is no runtime middleware; the only translation is the boot-time, per-device `metric_label` → `metric_slot` binding (and the device id → `device_index` binding), performed identically by both sides. The ingest record is a compact little-endian struct: `u32 device_index, u16 metric_slot, f32 value` (10 bytes), optionally followed by a `u64 sample_timestamp`.
 
-The generator must support:
+The generator supports:
 
 - Configurable global EPS (up to 300,000) or per-device reporting interval.
 - Per-metric value models for temperature, vibration, pressure, and power.
 - Within-noise jitter (exercises the ε filter), steps/ramps, and short spikes (exercise change suppression and short-lived-event visibility).
 - Spatial correlation across neighbouring racks/rooms for realistic LOD blending.
 - Offline transitions and dropped/late samples.
-- Deterministic seeding for reproducible benchmark traces (R6).
+- Deterministic seeding for reproducible benchmark traces (FR-CD-07).
 
-At full scale the simulator emits a compact binary ingest record over a non-blocking channel (or runs in-process); it must not serialise to text at 300k EPS. The JSON representation in PRD §7.1 is the K5 measurement baseline, not the ingest format.
+At full scale the simulator emits a compact binary ingest record over a non-blocking channel (or runs in-process); it does not serialise to text at 300k EPS. The JSON representation in PRD-001 §7.1 is the K5 measurement baseline, not the ingest format.
 
 ### 4.3 Node and Group Model
 
-The index is a set of nodes laid out in **one flat, parent-first array**. Each node is a group (at any level) or a leaf (device). A leaf stores an **offset into the separate state table**, never its reading (see §4.4). Each group's members occupy **one contiguous subtree**; a group's devices occupy a **contiguous block of state rows** (the contiguous-block invariant, §4.4).
+The index is a set of nodes laid out in **one flat, parent-first array** (Decision 8). Each node is a group (at any level) or a leaf (device). A leaf stores an **offset into the separate state table**, never its reading (see §4.4). Each group's members occupy **one contiguous subtree**; a group's devices occupy a **contiguous block of state rows** (the contiguous-block invariant, §4.4).
 
 ```
 Flat array (parent-first):
@@ -253,12 +261,12 @@ The engine separates three arrays by access pattern:
 | State | Latest value and availability per `(device, metric)` | Continuously, at ingest | Once per frame, per group |
 | Aggregates | Per-group per-channel accumulators (including the reserved attention channel); per-device attention level | Once per frame | Per viewer, per frame |
 
-- The **index** is a flat, parent-first, preorder array in structure-of-arrays form to keep traversal cache-friendly; the array position is the node's index and identity, so it is not stored redundantly. Nodes reference state by offset and range, never by value. The per-node field set is listed at the end of this section.
+- The **index** is a flat, parent-first, preorder array in structure-of-arrays form to keep traversal cache-friendly; the array position is the node's index and identity (Decision 11), so it is not stored redundantly. Nodes reference state by offset and range, never by value. The per-node field set is listed at the end of this section.
 - The **state table** is separate from the index and laid out **device-major in CSR form** — a compact `values` array plus a per-device `row_offsets` array — with devices in index leaf order and each device's declared metrics contiguous within its row in local-slot (declaration) order. Labels are device-local (§4.1), so a slot is meaningful only within its device and there is no global metric column. A device's row is `values[row_offsets[d] .. row_offsets[d+1]]`; a group's devices occupy a contiguous range of rows, so their values occupy one contiguous block. At boot the compiler records, per channel, the sorted absolute offsets of its contributing metric instances, so the aggregation pass walks a bounded, prefetch-friendly gather inside that block (FR-AG-02, K9); a metric feeding several channels appears in several such lists. A device's whole value set is contiguous, which suits the per-entry encode path (§9.3). The layout is fixed by Decision 7.
 - Rows are exact: a device's compact row holds only the metrics it declares, so there are no unused slots and the table is `Σ metrics/device` values plus `N+1` `u32` row offsets (~400 KB of offsets at 100k). At ~3 metrics/device the full-park table is ~300,000 values, so the table is small.
-- **Channel accumulators** are stored per group for its local channels and double-buffered: the frame reads one buffer while the sweep writes the other, then swaps (§7).
+- **Channel accumulators** are stored per group for its local channels and double-buffered: the frame reads one buffer while the sweep writes the other, then swaps (§7, Decision 5).
 
-**Index node shape.** The array position is the node's index and identity. Per node:
+**Index node shape.** The array position is the node's index and identity (Decision 11). Per node:
 
 | Field | Read by | Purpose |
 | --- | --- | --- |
@@ -276,14 +284,14 @@ The aggregation plan *is* this contribution array, indexed by **target channel**
 
 ### 4.5 Engine Configuration
 
-Parameters that are not part of the topology (PRD §8) live in an engine configuration file:
+Parameters that are not part of the topology (PRD-001 §8) live in an engine configuration file:
 
 | Parameter | Default | Requirement |
 | --- | --- | --- |
 | On-screen-size enter threshold | 120 px | FR-VS-06 |
 | On-screen-size exit threshold | 100 px | FR-VS-06 |
-| Budget hysteresis `Δ` | 10% of `B` | FR-VS-07, §8.3 |
-| Camera-context timeout | 1 s | FR-VS-08 |
+| Budget hysteresis `Δ` | 10% of `B` | §8.3, Decision 19 |
+| Camera-context timeout | 1 s | FR-VS-08, Decision 19 |
 
 These are engine-level settings and do not affect node or metric identities; the topology file (§4.1) remains the single shared source of identities (FR-TD-09).
 
@@ -328,7 +336,7 @@ Unit and reduction scans apply to configured channels and their contributions; t
 
 ### 5.4 Correctness Oracle
 
-Correctness is established against an **independent brute-force reference**, not a third-party spatial structure. The reference operates on the **flat device list directly** — it does not walk the index tree, so it does not share any traversal or pruning defect it is meant to catch. For the same `(topology, state, camera, selection)` it frustum-tests every device position (using the same inclusive point test as the engine, Decision 12), computes the ranked cut, and reduces the same readings; the engine's traversal must agree on the visible device-leaf set and its selection must match the reference cut. This mirrors the brute-force scalar reference used for aggregation (§7, §13), giving one independent reference per subsystem (R1).
+Correctness is established against an **independent brute-force reference**, not a third-party spatial structure. The reference operates on the **flat device list directly** — it does not walk the index tree, so it does not share any traversal or pruning defect it is meant to catch. For the same `(topology, state, camera, selection)` it frustum-tests every device position (using the same inclusive point test as the engine, Decision 12), computes the ranked cut, and reduces the same readings; the engine's traversal agrees on the visible device-leaf set and its selection matches the reference cut. This mirrors the brute-force scalar reference used for aggregation (§7, §13), giving one independent reference per subsystem (R1).
 
 The semantic n-ary tree has no shared basis with a binary spatial BVH, so the `bvh` crate is not used. Structural invariants (§5.3) cover the layout; the reference covers traversal and selection.
 
@@ -358,8 +366,8 @@ The semantic n-ary tree has no shared basis with a binary spatial BVH, so the `b
 - A channel combines one unit only (FR-AG-02), and unavailable (stale or offline) readings are excluded from the accumulation; a channel with no available contribution reports no value (FR-AG-04).
 - Results are published as a consistent per-frame snapshot (double-buffered internally); viewers read the published buffer (FR-AG-03).
 - Cost model: the shared pass is independent of viewer count; the per-viewer cost beyond it is **O(visible)**, not O(N) (R5, FR-AG-03).
-- Aggregates must match a brute-force reduction of the same contributions exactly (FR-AG-01, K4). Because floating-point addition is not associative, exact agreement requires a **canonical reduction order** shared by the scalar reference and any SIMD path: a **blocked-lane order with fixed `W = 8`** — source `i` accumulates into lane `i mod 8`, and the eight lanes fold in a fixed order (Decision 14). The scalar engine and the brute-force reference implement it identically, so they are bit-exact; a SIMD kernel reproduces the same lane pattern. `min`, `max` and `count` are order-free. A channel's reduction over up to 1,000 contributing readings targets ≤ 5 µs scalar (K9); the SIMD path aims for ≤ 1 µs as an engineering goal.
-- Contingency: reduce the configured channel set if the shared pass cannot meet K9; per-viewer cost must stay independent of viewer count (FR-AG-03).
+- Aggregates match a brute-force reduction of the same contributions exactly (FR-AG-01, K4). Because floating-point addition is not associative, exact agreement requires a **canonical reduction order** shared by the scalar reference and any SIMD path: a **blocked-lane order with fixed `W = 8`** — source `i` accumulates into lane `i mod 8`, and the eight lanes fold in a fixed order (Decision 14). The scalar engine and the brute-force reference implement it identically, so they are bit-exact; a SIMD kernel reproduces the same lane pattern. `min`, `max` and `count` are order-free. A channel's reduction over up to 1,000 contributing readings targets ≤ 5 µs scalar (K9); the SIMD path aims for ≤ 1 µs as an engineering goal.
+- Contingency: reduce the configured channel set if the shared pass cannot meet K9; per-viewer cost stays independent of viewer count (FR-AG-03).
 
 ### 7.1 Attention channel (severity and absence)
 
@@ -586,7 +594,7 @@ Named budgets sum to ≤ 7.5 ms; overruns do not cascade across frames. K2 measu
 | Ablation | SIMD on/off (aggregation and encode) | R2, K9 |
 | Ablation | ε suppression on/off (egress) | K5 |
 
-Aggregation is validated against a **brute-force scalar reference** and must match exactly on all fixtures (K4); both use the same blocked-lane order (Decision 14).
+Aggregation is validated against a **brute-force scalar reference** and matches exactly on all fixtures (K4); both use the same blocked-lane order (Decision 14).
 
 ## 14. Benchmark Methodology
 
@@ -630,7 +638,7 @@ The benchmark topology is produced by a **deterministic, seeded generator** (ver
 ### 14.3 Runs
 
 - Tiers: 4,280 / 50,000 / 100,000 devices, each with a fixed metric set per device (~3 metrics/device), so state size and boot cost are reproducible. All tiers run the same engine binary with no code change (G5).
-- Baseline reading rates per tier are fixed in §14.2; the simulator's per-device reporting profiles must reproduce them (see §4.2).
+- Baseline reading rates per tier are fixed in §14.2; the simulator's per-device reporting profiles reproduce them (see §4.2).
 - Client-side KPIs K6 and K7 are measured in the demo application at the building tier (~4,280 devices), not at the 100k tier.
 - End-to-end freshness (K11) is measured in the demo application with instrumented timestamps at the building scale.
 - Stress: ≥ 300,000 EPS for ≥ 30 min (K1).
@@ -673,13 +681,13 @@ Each decision states its decision in the first sentence, gives labelled aspects 
 | 2 | Aggregation by accumulator propagation over per-group channels | §7 |
 | 3 | Stateful per-viewer change suppression | §9 |
 | 4 | Per-group local channels with explicit contributions | §2, §3.1, §4.1, §4.4, §5.2, §6, §7 |
-| 5 | Aggregation execution: always-on 60 Hz background pass | §2, §7 |
+| 5 | Aggregation execution: always-on 60 Hz background pass | §2, §4.4, §7 |
 | 6 | Attention channel (severity and absence) | §3.1, §4.4, §7.1, §9.2, §9.3, §13 |
 | 7 | Metric identity and state layout: device-local labels, per-device instances, device-major state | §2, §4.1, §4.2, §4.4, §5.2, §5.3, §6, §9.4 |
-| 8 | Canonical child order and child enumeration | §4.1, §4.4, §5.2, §5.3, §8.2 |
+| 8 | Canonical child order and child enumeration | §4.1, §4.3, §4.4, §5.2, §5.3, §8.2 |
 | 9 | Config schema: JSON flat node list, explicit fields, shallow templates | §2, §4.1, §5.2, §7.1, §14.2 |
 | 10 | Index layout for channel definitions and contributions; aggregation direction | §3.2, §4.4, §7 |
-| 11 | Wire identity | §8.2, §9.3, §9.4, §9.5 |
+| 11 | Wire identity | §4.4, §8.2, §9.3, §9.4, §9.5 |
 | 12 | Hierarchy build details | §2, §5.2–§5.4 |
 | 13 | Benchmark host spec and fixed benchmark topology | §14 |
 | 14 | Canonical reduction order and SIMD | §4.4, §5.5, §7, §9.2, §13, §14.3 |
@@ -687,6 +695,7 @@ Each decision states its decision in the first sentence, gives labelled aspects 
 | 16 | State-table concurrency: lock-free atomics, overwrite back-pressure | §2, §6 |
 | 17 | Client rendering: InstancedMesh over a pre-allocated VBO | §2, §10.1 |
 | 18 | Technology stack: Rust engine, simulator, and harness; Three.js client over WebGL; WebSocket binary transport; Vite/TypeScript demo tooling | §2, §3, §9.1, §15 |
+| 19 | Engine configuration defaults: budget hysteresis Δ = 10% of `B`; camera-context timeout 1 s | §4.5, §8.1, §8.3 |
 
 ### Decision 1 — Frontier ordering
 
@@ -871,3 +880,13 @@ The project uses one stack throughout: Rust server-side, Three.js over WebGL in 
 - **Client rendering.** Three.js over WebGL on the GPU-accelerated browser of PRD-001 §9, drawing through the `InstancedMesh` path of Decision 17.
 - **Transport.** WebSocket carrying a compact binary frame format (§9.1), one persistent session per viewer (FR-TR-01).
 - **Alternatives rejected.** A garbage-collected server runtime — pause-time risk against the K2 and K9 budgets; a native or non-browser client — out of scope (PRD-001 §10); HTTP request/response or raw TCP — no persistent bidirectional session, contrary to FR-TR-01.
+
+### Decision 19 — Engine configuration defaults
+
+The entry-budget hysteresis band defaults to 10% of `B`, and the camera-context timeout defaults to 1 s; both are engine configuration rather than topology (§4.5).
+
+**Implements:** PRD-001 FR-VS-08.
+
+- **Budget band.** Expansion is admitted while `entries < B`; a node already expanded is retained until the cut falls below `B − Δ` (§8.3), so the entry budget does not oscillate at its edge.
+- **Camera timeout.** A last known camera context is reused until the 1 s timeout, after which that viewer's updates are held (§8.1).
+- **Alternatives rejected.** No budget band — unrelated scene contents would flip a group between blended and detailed at the budget edge (§8.3); no camera-context timeout — a stale context would be reused indefinitely, against K11 freshness.
