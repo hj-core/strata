@@ -52,65 +52,60 @@ PRD-001 §9 is authoritative.
 
 ## 3. Architecture Overview
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                            SERVER (Rust)                             │
-│                                                                      │
-│  Telemetry ingest ──► Atomic state table (latest-wins, lock-free)    │
-│                              │                                       │
-│  Topology config ──► Hierarchical spatial index (flat, parent-first) │
-│                              │                                       │
-│         ┌────────────────────┴────────────────────┐                  │
-│         ▼                                         ▼                  │
-│  Shared aggregation sweep (60 Hz, double-buffered)  Visibility query │
-│         │                                         │                  │
-│         └────────────────┬────────────────────────┘                  │
-│                          ▼                                           │
-│              Per-viewer selection + encode (f16 ε-filter)            │
-│                          │                                           │
-│                   WebSocket binary frames                            │
-└──────────────────────────┼───────────────────────────────────────────┘
-                           ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                     BROWSER CLIENT (Three.js)                        │
-│  InstancedMesh renderer · VBO writer · camera publisher · picking    │
-└──────────────────────────────────────────────────────────────────────┘
+The system comprises a server process and a browser client, supported by three additional programs: the simulator, the demo application, and the benchmark harness.
 
-Supporting: Simulator (Rust binary) → ingest; Demo app (Vite/TS) → client + engine.
-```
+- **Server (Rust).** Owns the state table and the hierarchical spatial index, and runs every stage of the pipeline: telemetry ingest, index build, shared aggregation, per-viewer visibility query, per-viewer encode, and WebSocket transport. All heavy work happens here, once per frame, shared across viewers.
+- **Browser client (Three.js).** Renders the entries the server selects, using an `InstancedMesh` over a pre-allocated VBO, and reports back its camera pose and screen geometry every frame, and its selected object and each deselection on change.
+- **Supporting programs.** The simulator (Rust binary) feeds ingest; the demo application (Vite/TS) wires simulator → engine → browser; the benchmark harness measures the KPIs (§14).
+
+Component responsibilities and PRD-001 coverage are given in §3.1. The order in which the stages execute — the boot path, the ingest path, the frame path, and both client feedback loops — is given as a numbered sequence in §3.2.
 
 ### 3.1 Component Responsibilities
 
+Each row lists the component's primary PRD-001 coverage; a requirement that spans components (for example FR-TD-09, FR-TD-10, FR-CD-09) appears on each. §16 is the authoritative requirement traceability.
+
 | Component | Responsibility | PRD coverage |
 | --- | --- | --- |
-| Simulator | Generate topology-driven telemetry at configurable rates. | FR-CD-07 |
-| Ingestor | Accept readings, apply latest-wins to the state table. | FR-IS-01, FR-IS-02 |
-| State table | Hold newest value per device; support boot-time layout. | FR-IS-01 |
-| Index builder | Build the hierarchical spatial index and validate invariants. | FR-TD-07, FR-TD-08 |
-| Aggregator | Compute each group's local channels and its reserved attention channel (and each device's attention level) once per frame from its devices' readings and its child groups' contributions; double-buffered. | FR-TD-05, FR-TD-06, FR-TD-11, FR-AG-01–FR-AG-06 |
-| Visibility engine | Frustum-cull and best-first refine the visible hierarchy into a bounded entry cut. | FR-VS-03–FR-VS-08 |
-| Encoder | Quantise, ε-filter, and suppress unchanged values per viewer. | FR-TR-02 |
-| Transport | WebSocket server + binary framing + sessions. | FR-TR-01, FR-TR-03, FR-TR-04 |
-| Client SDK | Render instances, publish camera, pick objects, select display value. | FR-CD-01–FR-CD-06 |
+| Simulator | Generate topology-driven telemetry at configurable rates from the shared topology. | FR-TD-09, FR-CD-07 |
+| Ingestor | Accept readings; apply latest-wins to the state table; reject invalid readings; sustain the offered stream without unbounded buffering. | FR-IS-01, FR-IS-02, FR-IS-05, FR-CD-09 |
+| State table | Hold exactly one current value per (device, metric) with its availability; device-major layout per §4.4. | FR-IS-01, FR-IS-03, FR-IS-04 |
+| Index builder | Load and validate the topology; build the hierarchical spatial index; bind metric labels to per-device slots. | FR-TD-01–FR-TD-04, FR-TD-07–FR-TD-09, FR-TD-10 |
+| Aggregator | Compute each group's channels and attention value once per frame from device readings and child-channel contributions; double-buffered. | FR-TD-05, FR-TD-06, FR-TD-10, FR-TD-11, FR-AG-01–FR-AG-06, FR-CD-09 |
+| Visibility engine | Accept camera context and selection; frustum-cull and best-first refine the hierarchy into a bounded entry cut. | FR-VS-01–FR-VS-08, FR-TD-10 |
+| Encoder | Quantise, ε-filter, and suppress unchanged values per viewer; stream the selected object at full fidelity. | FR-TR-02, FR-VS-02 |
+| Transport | WebSocket server + binary framing + sessions; ingress for camera context and inspection target. | FR-TR-01, FR-TR-03, FR-TR-04, FR-CD-09 |
+| Client SDK | Render instances, publish camera, pick objects, select display value; load the shared topology. | FR-CD-01–FR-CD-06, FR-TD-09 |
 | Demo app | Wire simulator → engine → browser at the building scale (~4,280 devices). | FR-CD-08, FR-CD-09 |
-| Benchmark harness | Measure and report KPIs. | FR-BR-01–FR-BR-04 |
+| Benchmark harness | Produce the fixed benchmark topology; measure and report KPIs. | FR-BR-01–FR-BR-05 |
 
 ### 3.2 End-to-End Data Flow
 
-The overview above shows the components; the flow below shows one frame's path end to end, including the camera feedback loop and the client's render step.
+Three paths precede or run alongside the frame: the **boot path**, which runs once before serving, the **ingest path**, which runs continuously and asynchronously to the frame, and the **frame path**, which runs once per 60 Hz cycle. The client closes the loop through two feedback inputs.
 
-```
-simulator ──readings──► state table (latest-wins)
-                            │
-                            ├──► shared aggregation (60 Hz, double-buffered)
-                            │
-browser ──camera──► visibility query (frustum + size threshold + entry budget, best-first)
-                            │
-                            └──► per-viewer select → f16 ε change suppression → WS frame
-                                                                        │
-browser ◄───────────────────────────────────────────────────────────────┘
-   └─ VBO write ─► InstancedMesh draw ─► 60 FPS
-```
+**Boot path — once, before serving**
+
+1. The topology config is loaded and validated, the hierarchical spatial index is built, metric labels are bound to per-device slots, and each channel's contribution list is compiled (§5.2, §5.3). The topology is then fixed until restart (FR-TD-07, FR-TD-08). Nothing below repeats on a restart-free server.
+
+**Ingest path — continuous, not frame-bound**
+
+2. The simulator emits readings (`device_index`, `metric_slot`, `value`) to the **ingestor**, which applies latest-wins into the **state table** and discards invalid readings (§4.2, §6). Freshness and offline state follow from the state table (FR-IS-03, FR-IS-04). This path never blocks on a frame.
+
+**Frame path — once per 60 Hz cycle**
+
+3. **Aggregation** reads the state table (metric values) and the index (the boot-compiled contribution plan, Decision 10) — and nothing per-viewer — then writes each group's channels and attention into the write buffer and swaps buffers to publish the frame's snapshot (§7).
+4. **Camera context** — each client sends its camera pose and screen geometry every frame, and its selected node index on selection change; the transport passes both to the visibility engine (§9.5).
+5. **Visibility** reads the index (AABBs, subtree sizes, child counts) and the camera context from step 4 — and reads no values — then produces that viewer's bounded entry cut of at most `B` entries (§8.2).
+6. **Encode** — per viewer, reads three inputs: the entry cut from step 5 (which entries exist), the aggregate snapshot from step 3 (a group entry's channel values), and the state table directly (a device entry's metric values via `state_offset`). It quantises to f16, applies the per-value ε filter, suppresses unchanged slots against the last-sent baseline, and sends the selected object at full fidelity (§9.2, §9.3).
+7. **Transport** writes one WebSocket binary frame for that viewer (§9.4); the session baseline advances only on an actual socket write (§9.2, §9.3).
+8. **Render** — the client writes instance transforms and colours into the pre-allocated VBO and draws the `InstancedMesh` (§10.1).
+
+Steps 3 and 5 are independent branches: they share no data and meet only at step 6. Step 5 cannot substitute for step 3's values, and step 3 does not know which entries step 5 selects.
+
+**Feedback and session paths**
+
+- **Camera loop:** step 4 → step 5, every frame. Without it the visibility query has no screen geometry and cannot size the LOD threshold (FR-VS-01).
+- **Selection loop:** step 4 → step 5 (force-include the selected object) and → step 6 (stream its values every frame until deselection), on selection change only (FR-VS-02).
+- **Session start:** on (re)connect the transport first sends the node dictionary (§9.5) and a full visible keyframe (FR-TR-03), after which the normal frame path — steps 3 through 8 — resumes carrying incremental frames.
 
 ## 4. Data Model
 
