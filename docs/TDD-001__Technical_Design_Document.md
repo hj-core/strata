@@ -20,17 +20,35 @@ Guiding rule: **the browser draws; the server thinks.** All heavy work is perfor
 
 ## 2. Design Goals and Constraints
 
-| Goal | Design consequence |
-| --- | --- |
-| Sustain ~300k EPS (K1) | Lock-free latest-wins state table; non-blocking ingest path. |
-| p99 query ≤ 1.5 ms at 100k (K2) | Constrained parent-first index; frustum pruning; heap-based best-first refinement. |
-| Bounded visible workload (K3) | Per-frame entry budget (~5,000) enforced as a frontier cut size. |
-| Exact aggregates (K4) | Per-group local channels; same-reduction contributions; accumulator merge (`mean → (sum, count)`); brute-force scalar reference for tests. |
-| ≥ 99% egress cut (K5) | f16 quantisation + per-value ε filter (metric/channel) + change suppression. |
-| Boot ≤ 30 s at 100k (K8) | Sequential single-pass build; the budget is dominated by config parse and validation (Decision 12). |
-| Same engine at 4,280 and 100,000 (G5) | Scale is a property of the data, not the code. |
+| Goal / target | Design consequence | Verified in |
+| --- | --- | --- |
+| Sustain ≥ 300,000 EPS for ≥ 30 min with stable memory (K1, G1) | Lock-free latest-wins state table and non-blocking ingest path (Decision 16); back-pressure by overwriting stale values rather than buffering, so memory stays bounded (FR-IS-05). | §14.3 |
+| Visibility query p99 ≤ 1.5 ms per viewer per 60 Hz frame at 100k, across all camera poses including max zoom-out; excludes encode, transport, and client (K2) | Constrained parent-first index; frustum pruning; heap-based best-first refinement. | §11, §14.3 |
+| ≤ 5,000 active entries per viewer per frame, worst case (K3, G2) | Per-frame entry budget enforced as a frontier cut size. | §13 |
+| Group aggregates match an exact reference; per-unit separation enforced (K4, G3) | Per-group local channels; one unit per channel, never mixed (FR-AG-02); same-reduction contributions; accumulator merge (`mean → (sum, count)`); brute-force scalar reference for tests. | §13 |
+| Egress ≤ 0.3 MB/s per client at 100k (≥ 99% cut); ≤ 0.15 MB/s at 50,000 (≥ 99%); ≤ 0.05 MB/s at 4,280 (≥ 98.5%) (K5, G4) | f16 quantisation + per-value ε filter (metric/channel) + change suppression. | §14.1, §14.3 |
+| Stable 60 FPS, main-thread overhead < 3 ms/frame (K6, G2) | InstancedMesh with a pre-allocated VBO; per-frame instance writes without allocation. | §11, §14.3 |
+| No monotonic heap growth in steady state; no allocation-driven frame spikes (K7) | Pre-allocated buffers; per-session state bounded (FR-TR-04). | §14.3 |
+| Boot ≤ 30 s at 100k (K8) | Sequential single-pass build; the budget is dominated by config parse and validation (Decision 12). | §14.3 |
+| ≤ 5 µs per channel per group with up to 1,000 contributing readings (K9) | Boot-recorded per-channel contribution offset lists walked as a bounded gather within the group's contiguous rows (Decision 7). | §11, §14.3 |
+| ≥ 10 concurrent browser sessions at 60 Hz at 100k devices; ≤ 50% aggregate server CPU; per-client egress within K5 (K10) | Aggregation pass independent of viewer count; per-viewer cost O(visible); per-session state bounded (FR-TR-04). | §14.3 |
+| Update freshness p99 ≤ 100 ms from a reading accepted by the engine to the rendered change in the client, at 60 Hz and the building scale (K11) | Stage budgets compose into an end-to-end path shorter than the freshness target. | §11, §14.3 |
+| Same binary serves 4,280 and 100,000 devices with no code change (G5) | One config-driven engine with no scale-specific code paths; scale is a property of the topology, not of the code. | §14.3 |
 
-**Constraints (PRD-001 §9).** The engine is Rust; the client is Three.js on a WebGL-capable mid-range laptop; transport is WebSocket, one persistent connection per viewer; all three scale tiers (4,280 / 50,000 / 100,000 devices) are served by the same engine; the topology is fixed at boot; benchmarking runs on a single fixed host; no production deployment is assumed.
+**Constraints (PRD-001 §9).** Key constraints carried from PRD-001 §9:
+
+- **Language/runtime:** engine in Rust; browser client in Three.js.
+- **Browser capability:** a WebGL-capable browser on a mid-range laptop is the rendering target.
+- **Transport:** WebSocket, one persistent connection per viewer.
+- **Scope tiers:** 4,280 / 50,000 / 100,000 devices are all in scope; the demonstration application targets the building tier (~4,280 devices); the tier set is reduced only by an explicit, versioned amendment (PRD §12, R8).
+- **Scale unit:** scale is counted in devices (the leaves of the hierarchy); memory and compute also depend on metrics per device and the reading rate.
+- **Benchmark host:** a single fixed host, specified before benchmarking begins.
+- **Measurement environment:** simulator, engine, and harness run on the fixed host with browsers on the same local network; the demonstration runs the engine and browser together on the laptop; wide-area network behaviour is out of scope.
+- **Topology stability:** fixed at boot, not modified while serving.
+- **LOD granularity:** level of detail depends on intermediate groups; a flat hierarchy still meets K3 but collapses to large blended entries when zoomed out.
+- **Deployment:** no production deployment is assumed.
+
+PRD-001 §9 is authoritative.
 
 ## 3. Architecture Overview
 
@@ -322,8 +340,8 @@ The semantic n-ary tree has no shared basis with a binary spatial BVH, so the `b
 
 ## 6. State Management and Ingestion
 
-- A **lock-free, latest-wins state table** indexed by `(device, metric)`, holding exactly one current value per entry. Writers (ingest) store values atomically; readers (aggregation/encode) load the newest value.
-- The ingest path is **non-blocking** and does not queue unboundedly; back-pressure is handled by overwriting stale values rather than buffering.
+- A **lock-free, latest-wins state table** indexed by `(device, metric)`, holding exactly one current value per entry. Writers (ingest) store values atomically; readers (aggregation/encode) load the newest value (Decision 16).
+- The ingest path is **non-blocking** and does not queue unboundedly; back-pressure is handled by overwriting stale values rather than buffering (Decision 16).
 - Readings for an unknown device or metric label, or with non-finite values, are rejected without altering existing state (FR-IS-02).
 - Availability is tracked per `(device, metric)`: a metric is current while a reading for it arrived within its configured freshness timeout, and its value is treated as unavailable once stale; a stale metric does not affect the availability of the device's other metrics. A device is marked **offline** when all of its metrics are unavailable, and returns online on the next accepted reading (FR-IS-03, FR-IS-04).
 - Each device's metrics are bound at boot to the **local channels of their containing group**. Aggregation reads the state slots of the metrics feeding each channel; a channel combines only same-unit contributions, and a contribution may join only a channel of the same reduction (FR-TD-05, FR-AG-02, FR-TD-06).
@@ -609,11 +627,13 @@ The benchmark topology is produced by a **deterministic, seeded generator** (ver
 
 ### 14.3 Runs
 
-- Tiers: 4,280 / 50,000 / 100,000 devices, each with a fixed metric set per device (~3 metrics/device), so state size and boot cost are reproducible.
+- Tiers: 4,280 / 50,000 / 100,000 devices, each with a fixed metric set per device (~3 metrics/device), so state size and boot cost are reproducible. All tiers run the same engine binary with no code change (G5).
 - Baseline reading rates per tier are fixed in §14.2; the simulator's per-device reporting profiles must reproduce them (see §4.2).
 - Client-side KPIs K6 and K7 are measured in the demo application at the building tier (~4,280 devices), not at the 100k tier.
 - End-to-end freshness (K11) is measured in the demo application with instrumented timestamps at the building scale.
 - Stress: ≥ 300,000 EPS for ≥ 30 min (K1).
+- Visibility latency: p99 ≤ 1.5 ms per viewer per 60 Hz frame at 100k, across camera poses including max zoom-out, engine instrumentation only (K2).
+- Boot: ≤ 30 s from topology file to fully loaded and serving at 100k devices (K8).
 - Concurrent-session run: ≥ 10 browser sessions at 60 Hz at the full-scale tier (100,000 devices); ≤ 50% aggregate CPU; per-client egress within K5 (K10).
 - Micro-benchmark: per-channel group aggregation (K9).
 - Ablation (FR-BR-03, Should): sibling ordering on/off (locality hypothesis; expected nil, since a parent's AABB is order-invariant); SIMD on/off for aggregation and encoding (informs the SIMD ship decision, Decision 14); ε suppression on/off (egress, K5).
@@ -639,7 +659,7 @@ The benchmark topology is produced by a **deterministic, seeded generator** (ver
 | FR-TR-01–FR-TR-04 (viewer transport/encoding/sessions) | §9 |
 | FR-CD-01–FR-CD-09 (client/demo) | §10, §3 |
 | FR-BR-01–FR-BR-05 (benchmark/report) | §14 |
-| K1–K11 | §11, §14 |
+| K1–K11 | §11, §13, §14 |
 
 ## 17. Design Decisions
 
@@ -660,6 +680,7 @@ The benchmark topology is produced by a **deterministic, seeded generator** (ver
 | 13 | Benchmark host spec and fixed benchmark topology | §14; records FR-BR-05 |
 | 14 | Canonical reduction order and SIMD | §7, §9.2 |
 | 15 | Transport encoding, keyframes, and egress | §9.2–§9.4 |
+| 16 | State-table concurrency: lock-free atomics, overwrite back-pressure | §2, §6 |
 
 ### Decision 1 — Frontier ordering
 
@@ -796,3 +817,11 @@ Recorded in §9.2–§9.4.
 - **Frame layout.** Little-endian; a leading `u8 type`, then a header (sequence, flags, entry count), then entries keyed by node index (Decision 11), each with entry flags, a changed-slot mask, the included f16 values, and attention only when changed. The canonical unavailable marker is the quiet-NaN f16 pattern `0x7E00`.
 - **Keyframes.** Full visible keyframe on (re)connect; appeared entries sent in full on expansion or visibility change; on-demand resync when a client detects a sequence gap; no periodic keyframe.
 - **Baseline and slow clients.** The baseline advances only on an actual socket write. Egress is latest-wins: a stale pending frame is replaced, and a dropped frame does not advance the baseline, so a client never decodes against a value it did not receive. Per-session state stays bounded by the current visible set plus the selected object.
+
+### Decision 16 — State-table concurrency
+
+Recorded in §2, §6.
+
+- **Model.** Ingest writes each `(device, metric)` slot atomically and readers load the newest value; no lock is taken on either path, and the ingest path never queues.
+- **Back-pressure.** A saturated ingest overwrites stale values instead of buffering, which is what binds memory (FR-IS-05) and is the consequence K1 actually requires.
+- **Alternatives rejected.** A mutex or sharded-lock table would plausibly meet K1 (300,000 atomic stores/s is well within reach of coarser schemes), so lock-freedom is a preference rather than a necessity — it is recorded here rather than assumed in §2's goal table. An MPSC queue with bounded backlog was rejected because queued readings would age out of the freshness window (FR-IS-03) under load; per-viewer or per-request state tables were rejected as duplicated state.
