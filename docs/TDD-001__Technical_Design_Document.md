@@ -12,9 +12,11 @@
 
 ## 1. Introduction and Scope
 
-This document describes **how** the filtering engine is built: architecture, data structures, algorithms, transport semantics, client design, and evaluation methodology. It elaborates the settled design decisions and satisfies the requirements in PRD-001, its only upstream dependency. References to execution activities (for example `A7`, `A14`, `M1`) are PLN-001 identifiers.
+This document records and elaborates the design decisions for **how** the system is built: configuration schema and data model (§4), spatial index and aggregation (§5, §7), visibility selection (§8), transport and wire protocol (§9), client and simulator design (§4.2, §10), and testing and benchmark methodology (§13, §14). It addresses the requirements in PRD-001, its only upstream dependency; §16 maps each requirement area to its design section.
 
-Guiding rule: **the browser draws; the server thinks.** All heavy work is performed once on the server and shared across viewers; each viewer receives a small, relevant slice per frame.
+Design scope follows PRD-001. Capabilities excluded there (PRD §10) — including field-protocol integration, telemetry persistence, statistical reductions beyond the supported set, alerting, federation, fraction-based coverage policy, explicit out-of-service signalling, occlusion, authentication and authorization, non-browser clients, and cloud deployment — remain out of scope here; PRD-001 §10 is authoritative.
+
+Guiding rule: **the browser draws; the server thinks.** All heavy work is performed once per frame on the server and shared across viewers; each viewer receives a small, relevant slice per frame.
 
 ## 2. Design Goals and Constraints
 
@@ -27,6 +29,8 @@ Guiding rule: **the browser draws; the server thinks.** All heavy work is perfor
 | ≥ 99% egress cut (K5) | f16 quantisation + per-value ε filter (metric/channel) + change suppression. |
 | Boot ≤ 30 s at 100k (K8) | Sequential single-pass build; the budget is dominated by config parse and validation (Decision 12). |
 | Same engine at 4,280 and 100,000 (G5) | Scale is a property of the data, not the code. |
+
+**Constraints (PRD-001 §9).** The engine is Rust; the client is Three.js on a WebGL-capable mid-range laptop; transport is WebSocket, one persistent connection per viewer; all three scale tiers (4,280 / 50,000 / 100,000 devices) are served by the same engine; the topology is fixed at boot; benchmarking runs on a single fixed host; no production deployment is assumed.
 
 ## 3. Architecture Overview
 
@@ -72,6 +76,23 @@ Supporting: Simulator (Rust binary) → ingest; Demo app (Vite/TS) → client + 
 | Client SDK | Render instances, publish camera, pick objects, select display value. | FR-CD-01–FR-CD-06 |
 | Demo app | Wire simulator → engine → browser at the building scale (~4,280 devices). | FR-CD-08, FR-CD-09 |
 | Benchmark harness | Measure and report KPIs. | FR-BR-01–FR-BR-04 |
+
+### 3.2 End-to-End Data Flow
+
+The overview above shows the components; the flow below shows one frame's path end to end, including the camera feedback loop and the client's render step.
+
+```
+simulator ──readings──► state table (latest-wins)
+                            │
+                            ├──► shared aggregation (60 Hz, double-buffered)
+                            │
+browser ──camera──► visibility query (frustum + size threshold + entry budget, best-first)
+                            │
+                            └──► per-viewer select → f16 ε change suppression → WS frame
+                                                                        │
+browser ◄───────────────────────────────────────────────────────────────┘
+   └─ VBO write ─► InstancedMesh draw ─► 60 FPS
+```
 
 ## 4. Data Model
 
@@ -500,22 +521,7 @@ Object picking / click-to-inspect (FR-CD-04). Primary path uses instance id hit-
 
 Each rendered object is coloured by one selected value (FR-CD-03). The default is the object's **attention value** (a group's reserved attention channel, or a device's attention level), which gives a consistent fixed severity scale for comparing devices and groups. The viewer may instead select a metric (for a device instance) or one of the group's local channels (for a group entry); because a group's channels are local to it, these selectable values are resolved per group from the shared config. Switching is a client-only change, since every visible entry's complete value set is already streamed (§9.3).
 
-## 11. End-to-End Data Flow
-
-```
-simulator ──readings──► state table (latest-wins)
-                            │
-                            ├──► shared aggregation (60 Hz, double-buffered)
-                            │
-browser ──camera──► visibility query (frustum + size threshold + entry budget, best-first)
-                            │
-                            └──► per-viewer select → f16 ε change suppression → WS frame
-                                                                        │
-browser ◄───────────────────────────────────────────────────────────────┘
-   └─ VBO write ─► InstancedMesh draw ─► 60 FPS
-```
-
-## 12. Performance Budgets
+## 11. Performance Budgets
 
 | Stage | Budget | KPI |
 | --- | --- | --- |
@@ -527,6 +533,20 @@ browser ◄───────────────────────
 | Rendering | remaining ~10 ms | K6 |
 
 Named budgets sum to ≤ 7.5 ms; overruns do not cascade across frames. K2 measures the server-traversal stage only; these stage budgets compose into the end-to-end freshness target (K11).
+
+## 12. Risk-to-Design Mapping
+
+| Risk | Design response |
+| --- | --- |
+| R1 index correctness | Structural invariants + boot scan; independent flat-list brute-force reference for traversal and selection; R5 fallback if pruning is inadequate. |
+| R2 SIMD correctness | Scalar reference alongside SIMD; boundary tests; scalar ships first. |
+| R3 channel/contribution invariants | Build-time assertions; per-group channel definitions; unit and same-reduction contributor validation; permutation tests; gather/reduce fallbacks. |
+| R4 Three.js failures | Early InstancedMesh spike; WebGL inspector; mesh rebuild fallback; CPU raycast. |
+| R5 latency | Skip-offset pruning; expansion budget; shared aggregation; grid/idle/top-50 fallbacks. |
+| R6 simulator starvation | Core pinning; non-blocking I/O; pre-generated traces. |
+| R7 flicker | Hysteresis; keyframe on expand; GPU cross-fade contingency. |
+| R8 slippage | Scalar-first; building-scale-only benchmarks; CPU picking; defer 100k tier. |
+| R9 configuration validity | Boot-time validation rejects structural and channel/unit inconsistencies before serving (FR-TD-07, FR-TD-08). |
 
 ## 13. Testing and Validation Strategy
 
@@ -552,7 +572,7 @@ Aggregation is validated against a **brute-force scalar reference** and must mat
 
 ### 14.1 Benchmark host
 
-The backend host is fixed before benchmarking (FR-BR-01). These fields are recorded at M1; concrete values are filled before A14.
+The backend host is fixed before benchmarking (FR-BR-01). These fields are recorded when the architecture is frozen; concrete values are filled before the first benchmark run.
 
 | Field | Value |
 | --- | --- |
@@ -566,7 +586,7 @@ The backend host is fixed before benchmarking (FR-BR-01). These fields are recor
 | Client-KPI laptop | mid-range laptop, specified separately (K6/K7/K11) |
 | Network | localhost / same LAN |
 
-The K5 raw-streaming baseline is fixed in PRD §7.1 (full-key JSON, ~100 B/reading). Baseline performance numbers are produced at A14–A16.
+The K5 raw-streaming baseline is fixed in PRD §7.1 (full-key JSON, ~100 B/reading). Baseline performance numbers are produced by the benchmark runs of §14.
 
 ### 14.2 Fixed benchmark topology (FR-BR-05)
 
@@ -596,24 +616,10 @@ The benchmark topology is produced by a **deterministic, seeded generator** (ver
 - Stress: ≥ 300,000 EPS for ≥ 30 min (K1).
 - Concurrent-session run: ≥ 10 browser sessions at 60 Hz at the full-scale tier (100,000 devices); ≤ 50% aggregate CPU; per-client egress within K5 (K10).
 - Micro-benchmark: per-channel group aggregation (K9).
-- Ablation (FR-BR-03, Should): sibling ordering on/off (locality hypothesis; expected nil, since a parent's AABB is order-invariant); SIMD on/off for aggregation and encoding (informs the A7 ship decision); ε suppression on/off (egress, K5).
+- Ablation (FR-BR-03, Should): sibling ordering on/off (locality hypothesis; expected nil, since a parent's AABB is order-invariant); SIMD on/off for aggregation and encoding (informs the SIMD ship decision, Decision 14); ε suppression on/off (egress, K5).
 - Simulator pinned via `taskset`; non-blocking I/O; pre-generated traces as contingency (R6).
 
-## 15. Risk-to-Design Mapping
-
-| Risk | Design response |
-| --- | --- |
-| R1 index correctness | Structural invariants + boot scan; independent flat-list brute-force reference for traversal and selection; R5 fallback if pruning is inadequate. |
-| R2 SIMD correctness | Scalar reference alongside SIMD; boundary tests; scalar ships first. |
-| R3 channel/contribution invariants | Build-time assertions; per-group channel definitions; unit and same-reduction contributor validation; permutation tests; gather/reduce fallbacks. |
-| R4 Three.js failures | Early InstancedMesh spike; WebGL inspector; mesh rebuild fallback; CPU raycast. |
-| R5 latency | Skip-offset pruning; expansion budget; shared aggregation; grid/idle/top-50 fallbacks. |
-| R6 simulator starvation | Core pinning; non-blocking I/O; pre-generated traces. |
-| R7 flicker | Hysteresis; keyframe on expand; GPU cross-fade contingency. |
-| R8 slippage | Scalar-first; building-scale-only benchmarks; CPU picking; defer 100k tier. |
-| R9 configuration validity | Boot-time validation rejects structural and channel/unit inconsistencies before serving (FR-TD-07, FR-TD-08). |
-
-## 16. Build and Tooling
+## 15. Build and Tooling
 
 - Rust workspace: `engine`, `transport`, `simulator`, `benches` crates; `cargo nextest` tests; `criterion` benchmarks; `cargo-flamegraph`/`perf` profiling.
 - Nightly toolchain for `portable_simd` (optional, behind a feature flag).
@@ -622,7 +628,7 @@ The benchmark topology is produced by a **deterministic, seeded generator** (ver
 - **Run diagnostics (FR-CD-09):** each component logs a structured boot summary and any validation fault, and exposes counters for ingest rate, rejected readings, aggregate-pass time, and per-session egress; the demo surfaces them in a status panel.
 - Everything is developed in the open: commits, design notes, and benchmark numbers land in the public GitHub repository as the work happens.
 
-## 17. Requirement Traceability
+## 16. Requirement Traceability
 
 | PRD requirement | TDD section |
 | --- | --- |
@@ -633,9 +639,9 @@ The benchmark topology is produced by a **deterministic, seeded generator** (ver
 | FR-TR-01–FR-TR-04 (viewer transport/encoding/sessions) | §9 |
 | FR-CD-01–FR-CD-09 (client/demo) | §10, §3 |
 | FR-BR-01–FR-BR-05 (benchmark/report) | §14 |
-| K1–K11 | §12, §14 |
+| K1–K11 | §11, §14 |
 
-## 18. Design Decisions
+## 17. Design Decisions
 
 | # | Decision | Recorded in |
 | --- | --- | --- |
@@ -772,7 +778,7 @@ Recorded in §2, §5.2, §5.3, §5.4.
 
 Records FR-BR-05. Recorded in §14.
 
-- **Host.** The backend host spec is recorded as a field template (§14.1) at M1, with concrete values filled before A14. The K5 raw baseline is fixed in PRD §7.1; performance numbers are produced at A14–A16.
+- **Host.** The backend host spec is recorded as a field template (§14.1) when the architecture is frozen, with concrete values filled before the first benchmark run. The K5 raw baseline is fixed in PRD §7.1; performance numbers are produced by the benchmark runs of §14.
 - **Topology (FR-BR-05).** A deterministic, seeded generator (`bench-v1`) emits each tier's topology in the §4.1 schema, with fixed tier shapes (4,280 / 50,000 / 100,000 devices over 80 / 800 / 1,600 racks), a ~3-metric set, per-level channels with explicit contributions, grid positions, per-tier reading rates, and `group_types` templates. The generated file is versioned and published with the report.
 
 ### Decision 14 — Canonical reduction order and SIMD
@@ -780,7 +786,7 @@ Records FR-BR-05. Recorded in §14.
 Recorded in §7, §9.2, §13.
 
 - **Canonical order.** Sums use a blocked-lane order with fixed `W = 8`: source `i` accumulates into lane `i mod 8`, and the eight lanes fold in a fixed order. A channel's sources are already ordered (seeds by ascending state offset, then merges by child order, Decision 10), so the reduction is fully deterministic. The scalar engine and the brute-force reference implement the identical lane scheme and are therefore bit-exact; `min`/`max`/`count` are order-free, and the encode pipeline (f16 quantise, ε filter) is elementwise.
-- **SIMD.** Scalar is the default and the reference. SIMD for aggregation and encoding ships behind a feature flag, with the ship decision made at A7 from the K9 measurement; the scalar path remains authoritative.
+- **SIMD.** Scalar is the default and the reference. SIMD for aggregation and encoding ships behind a feature flag, with the ship decision made from the K9 measurement; the scalar path remains authoritative.
 
 ### Decision 15 — Transport encoding, keyframes, and egress
 
