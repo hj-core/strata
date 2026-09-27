@@ -6,7 +6,7 @@
 | Title | Master Execution Sequence |
 | Version | 0.1.1 |
 | Status | Draft |
-| Date | 2026-09-20 |
+| Last Updated | 2026-09-20 |
 | Owner | Project maintainer |
 | Related documents | Upstream: PRD-001 (Product Requirements), TDD-001 (Technical Design). |
 

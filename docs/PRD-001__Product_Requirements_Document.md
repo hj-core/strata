@@ -4,19 +4,21 @@
 | --- | --- |
 | Document ID | PRD-001 |
 | Title | Server-Side Hierarchical Spatial Filtering Engine for 3D Digital Twin Visualization |
-| Version | 0.2.2 |
+| Version | 0.3.0 |
 | Status | Draft |
-| Date | 2026-09-20 |
+| Last Updated | 2026-09-27 |
 | Owner | Project maintainer |
 | Related documents | Downstream: TDD-001 (Technical Design), PLN-001 (Master Execution Sequence). This document is self-contained. |
 
 ## 1. Purpose
 
-This document specifies **what** the project must deliver and **how success is judged**. It is the authoritative, self-contained statement of product requirements and acceptance criteria; it does not prescribe implementation. Downstream design and execution documents trace back to it.
+This document specifies **what** the project must deliver and **how success is judged**. It is the authoritative, self-contained statement of requirements and acceptance criteria; it does not prescribe implementation. Downstream design and execution documents trace back to it. Throughout this document, the **product** is the engine alone, and the **project** is the product together with the demonstration packages and benchmark artifacts (§13).
 
-The core product is a **Rust server engine**: the real-time spatial filtering and streaming layer for visualization, and one component of a digital-twin stack rather than a complete platform. It keeps a large site's telemetry current and, for each viewer, decides per frame what to send, what to blend into group readings, and what to drop. The design follows one central rule: **the browser draws; the server thinks.** All heavy data work happens once per frame on the server, shared across viewers; the browser only renders a small, relevant slice.
+The product is a **server engine**: the real-time spatial filtering and streaming layer for visualization, and one component of a digital-twin stack rather than a complete platform. It keeps a large site's telemetry current and, for each viewer, decides per frame what to send, what to blend into group readings, and what to drop. The design follows one central rule: **the browser draws; the server thinks.** All heavy data work happens once per frame on the server, shared across viewers; the browser only renders a small, relevant slice.
 
-A synthetic simulator, a browser 3D client, and a demo application are demonstration packages that exercise the engine end to end, forming a reproducible showcase in which an ordinary browser renders a live, smooth 3D "digital twin". Benchmarking covers three tiers — a single building (~4,280 devices), an intermediate site (50,000), and a full park (100,000) — while the demonstration application targets the building tier (~4,280 devices). Throughout this document, a **frame** is one 60 Hz aggregation-and-streaming cycle.
+A synthetic simulator, a browser 3D client, and a demo application are demonstration packages that exercise the engine end to end, forming a reproducible showcase in which an ordinary browser renders a live 3D **digital twin** of the site: a simplified visualization in which each rendered object — an individual device or a blended group — reflects its current state. The simulator emits the readings; the browser 3D client renders the scene and publishes camera and selection; the demo application integrates simulator → engine → browser into a single runnable showcase (§6.6). The remaining deliverables are a benchmark harness, a fixed benchmark topology, and a benchmark report (§13). Benchmarking covers three tiers — a single building (~4,280 devices), an intermediate site (50,000), and a full park (100,000) — while the demonstration application targets the building tier.
+
+Throughout this document, a **frame** is one 60 Hz server aggregation-and-streaming cycle. The client's render loop is a separate 60 Hz cycle: on the client side a per-frame requirement or target is a render frame (for example FR-CD-02, FR-CD-05, FR-CD-06, K6, K7); on the server side, the server cycle. K11 spans both.
 
 ## 2. Problem Statement
 
@@ -29,9 +31,9 @@ Two straightforward approaches are inadequate:
 
 The site therefore produces roughly a hundred-fold more telemetry than the engine streams to a viewer (K5). The product must reduce the stream, per viewer and per frame, to what is visible and meaningfully changed, while preserving spatial context and live accuracy.
 
-## 3. Product Goals
+## 3. Goals
 
-The project's committed objectives define five product goals:
+The project commits to five goals:
 
 | ID | Goal | Verified by |
 | --- | --- | --- |
@@ -41,6 +43,8 @@ The project's committed objectives define five product goals:
 | G4 | Cut network traffic by at least 99% at full scale and 98.5% at building scale versus raw streaming. | K5 |
 | G5 | Serve both a single building (~4,280 devices) and a full park (100,000 devices) with the same untouched engine. | §12 |
 
+G2 spans product and showcase: K3 bounds the entries the product streams, while K6 confirms that the demonstration client sustains that workload at building scale.
+
 ## 4. Users and Personas
 
 | Persona | Description | Primary needs | Serves |
@@ -48,6 +52,8 @@ The project's committed objectives define five product goals:
 | Operator / Analyst | Watches the live 3D site view in a browser and inspects devices. | Smooth 60 FPS, spatial context, click-to-inspect live values, no stale data. | FR-VS-01–FR-VS-08, FR-CD-01–FR-CD-06, K6, K7, K11 |
 | Integrator / Developer | Configures site topology and runs the simulator, engine, client, and demo application. | Simple config format, reproducible run order, clear logs and metrics. | FR-TD-01, FR-TD-04, FR-TD-05, FR-TD-09, FR-TD-11, FR-CD-07, FR-CD-08, FR-CD-09 |
 | Reviewer / Reproducer | Independently reproduces the benchmark results. | Reproducible benchmark host, scripts, and a benchmark report. | FR-BR-01–FR-BR-05, K1–K11 |
+
+All three personas belong to the **project**: the Operator reaches the product through the demonstration client, the Integrator runs the full sequence, and the Reviewer reproduces the benchmark.
 
 ## 5. System Context
 
@@ -58,7 +64,7 @@ The project's committed objectives define five product goals:
  [Simulator: ~100k devices, ~300k EPS]
              │ readings
              ▼
- SERVER (Rust engine), shared across all viewers
+ SERVER (engine), shared across all viewers
    ├─ keeps the latest reading per device metric
    ├─ groups devices by place (e.g. site → building → room → rack → device)
    ├─ blends readings of groups too small on screen
@@ -66,7 +72,7 @@ The project's committed objectives define five product goals:
              │  visible slice + selected values
              │  ≤ 5,000 active entries/frame/viewer
              ▼
- BROWSERS (WebGL): draw at 60 FPS, click-to-inspect
+ BROWSERS: draw at 60 FPS, click-to-inspect
              │
              ├─ camera pose + screen geometry, every frame ─► server
              └─ selected object id, on selection change ─► server
@@ -74,11 +80,11 @@ The project's committed objectives define five product goals:
 
 Each browser sends its camera pose (position and orientation) and screen geometry to the server every frame, and the identity of its selected object on selection change, closing the feedback loop that drives server-side visibility selection, blending, and targeted inspection (FR-VS-01, FR-VS-02, FR-CD-04, FR-CD-06). The simulator, the engine, and the client all load the same topology definition, so device and metric identities, positions, units, and thresholds align (FR-TD-09).
 
-The benchmark harness and report complete the deliverables (see §13).
+The benchmark harness, the fixed benchmark topology, and the benchmark report complete the deliverables (see §13).
 
 ## 6. Functional Requirements
 
-Requirement IDs use `FR-<area>-<nn>`, where `<area>` is one of `TD` (topology and data), `IS` (ingestion and state), `AG` (aggregation), `VS` (visibility and selection), `TR` (transport), `CD` (client and demonstration), or `BR` (benchmarking and reporting).
+Requirement IDs use `FR-<area>-<nn>`, where `<area>` is one of `TD` (topology and data), `IS` (ingestion and state), `AG` (aggregation), `VS` (visibility and selection), `TR` (transport), `CD` (client and demonstration), or `BR` (benchmarking and reporting). Sections 6.1–6.5 specify the **product**; §6.6 and §6.7 specify the demonstration packages and benchmarking. FR-CD-09 additionally binds the engine.
 
 Priority: **M** = must have, **S** = should have.
 
@@ -176,23 +182,23 @@ Validation conditions for FR-TD-08:
 
 ## 7. Non-Functional Requirements (KPI Targets)
 
-These are the measurable acceptance targets. Throughput is quoted in readings per second (EPS). Backend targets are measured on the fixed benchmark host across all three tiers; browser-facing targets (K6, K7, K11) are measured in the demo application on a mid-range laptop at the building scale (~4,280 devices). The K5 baseline is defined in §7.1.
+These are the measurable acceptance targets. Throughput is quoted in readings per second (EPS). Product targets (K1–K5, K8–K10) are measured on the fixed benchmark host: K1, K2, K8, and K10 are defined at the full-scale tier (100,000 devices); K5 gives a target for each tier; K3, K4, and K9 are tier-independent. Showcase targets (K6, K7, K11) are measured in the demo application on a mid-range laptop at the building scale (~4,280 devices). The K5 baseline is defined in §7.1.
 
-| KPI | Metric | Target | Verified by |
-| --- | --- | --- | --- |
-| K1 | Sustained ingestion throughput | ≥ 300,000 EPS for ≥ 30 min with stable memory | Stress run at 100k |
-| K2 | Visibility query latency | Server-side: p99 ≤ 1.5 ms per viewer per 60 Hz frame at 100k, across all camera poses, including max zoom-out; excludes encode, transport, and client | Engine instrumentation |
-| K3 | Bounded visible workload | ≤ 5,000 active entries/frame worst case (device instances + blended group entries) | Per-frame visible-set log |
-| K4 | Aggregate correctness | Group aggregates match an exact reference; per-unit separation enforced | Unit + property tests |
-| K5 | Steady-state egress | ≤ 0.3 MB/s/client at 100k (≥ 99% cut); ≤ 0.15 MB/s at 50,000 (≥ 99% cut); ≤ 0.05 MB/s at 4,280 (≥ 98.5% cut), for the benchmark topology's configured channel set, including per-entry attention values | Network accounting |
-| K6 | Client frame rate | Stable 60 FPS, main-thread overhead < 3 ms/frame | Browser profiler |
-| K7 | Client memory | No monotonic heap growth in steady state; no allocation-driven frame spikes | Browser memory timeline |
-| K8 | Boot time | ≤ 30 s from topology file to fully loaded and serving at 100k devices | Boot timer |
-| K9 | Per-channel aggregation latency | ≤ 5 µs per channel per group with up to 1,000 contributing readings (a rack, for example) | Micro-benchmark + ablation |
-| K10 | Multi-client scaling | ≥ 10 concurrent browser sessions at 60 Hz at 100k devices, ≤ 50% aggregate server CPU, per-client egress within K5 | Concurrent-session benchmark |
-| K11 | Update freshness | p99 ≤ 100 ms from a reading accepted by the engine to the rendered change in the client, at 60 Hz and the building scale (~4,280 devices) | End-to-end instrumentation |
+| KPI | Metric | Target | Verified by | Scope |
+| --- | --- | --- | --- | --- |
+| K1 | Sustained ingestion throughput | ≥ 300,000 EPS for ≥ 30 min with stable memory | Stress run at 100k | Product |
+| K2 | Visibility query latency | Server-side: p99 ≤ 1.5 ms per viewer per 60 Hz frame at 100k, across all camera poses, including max zoom-out; excludes encode, transport, and client | Engine instrumentation | Product |
+| K3 | Bounded visible workload | ≤ 5,000 active entries/frame worst case (device instances + blended group entries) | Per-frame visible-set log | Product |
+| K4 | Aggregate correctness | Group aggregates match an exact reference; per-unit separation enforced | Unit + property tests | Product |
+| K5 | Steady-state egress | ≤ 0.3 MB/s/client at 100k (≥ 99% cut); ≤ 0.15 MB/s at 50,000 (≥ 99% cut); ≤ 0.05 MB/s at 4,280 (≥ 98.5% cut), for the benchmark topology's configured channel set, including per-entry attention values | Network accounting | Product |
+| K6 | Client frame rate | Stable 60 FPS, main-thread overhead < 3 ms/frame | Browser profiler | Showcase |
+| K7 | Client memory | No monotonic heap growth in steady state; no allocation-driven frame spikes | Browser memory timeline | Showcase |
+| K8 | Boot time | ≤ 30 s from topology file to fully loaded and serving at 100k devices | Boot timer | Product |
+| K9 | Per-channel aggregation latency | ≤ 5 µs per channel per group with up to 1,000 contributing readings (a rack, for example) | Micro-benchmark + ablation | Product |
+| K10 | Multi-client scaling | ≥ 10 concurrent browser sessions at 60 Hz at 100k devices, ≤ 50% aggregate server CPU, per-client egress within K5 | Concurrent-session benchmark | Product |
+| K11 | Update freshness | p99 ≤ 100 ms from a reading accepted by the engine to the rendered change in the client, at 60 Hz and the building scale (~4,280 devices) | End-to-end instrumentation | Showcase |
 
-Aggregation cost and steady-state egress scale with the number of channels actually configured (at most 16 per group, plus the group attention value).
+Aggregation cost and steady-state egress scale with the number of channels configured (at most 16 per group, plus the group attention value).
 
 Latency KPIs measure distinct intervals: K2 covers engine-side visibility computation only, excluding encoding, transport, and client; K11 is end-to-end, from a reading accepted by the engine to the rendered change in the client.
 
@@ -204,7 +210,7 @@ K5's cuts are measured against a raw-streaming baseline: every reading forwarded
 {"device_id":"rack-07-node-4213","metric":"temperature","value":23.75,"unit":"C","ts":1757587200123}
 ```
 
-At ~100 bytes per reading, the baseline follows each tier's aggregate reading rate (the benchmark topology also fixes the metric set per device; state size is the number of device-metric pairs):
+At ~100 bytes per reading, the baseline follows each tier's aggregate reading rate:
 
 | Tier | Devices | Metrics/device | Aggregate readings/s | Raw baseline |
 | --- | --- | --- | --- | --- |
@@ -212,13 +218,15 @@ At ~100 bytes per reading, the baseline follows each tier's aggregate reading ra
 | Intermediate | 50,000 | ~3 | ~150,000 (~3 per device/s) | ~15 MB/s |
 | Building | 4,280 | ~3 | ~37,000 (~8.6 per device/s) | ~3.7 MB/s |
 
+The benchmark topology also fixes the metric set per device; state size is the number of device-metric pairs.
+
 At full scale, 300,000 readings/s × 100 B ≈ **30 MB/s**. The building tier's higher per-device rate reflects denser high-frequency instrumentation (for example, vibration and power metrics sampled at several hertz); the per-reading size is identical across tiers.
 
 The baseline is fixed explicitly so the reduction is reproducible and reflects server-side selection, LOD blending, and change suppression.
 
 The engine's byte-level representation of the same values, including exact wire widths, is an implementation detail fixed in the technical design.
 
-## 8. Interfaces and Data Contracts (Product Level)
+## 8. Interfaces and Data Contracts (Specification Level)
 
 | Interface | Direction | Content |
 | --- | --- | --- |
@@ -233,16 +241,15 @@ Exact wire layouts and the configuration schema are implementation details outsi
 
 ## 9. Constraints and Assumptions
 
-- **Language/runtime:** engine in Rust; browser client in Three.js.
-- **Browser capability:** a WebGL-capable browser on a mid-range laptop is the rendering target.
-- **Transport:** WebSocket, one persistent connection per viewer.
-- **Scope tiers:** 4,280 / 50,000 / 100,000 devices are deliberately demanding and testable figures, not measurements from a field study. All three tiers are in scope — the benchmark harness exercises all three, while the demonstration application targets the building tier (~4,280 devices) — including the full-park (100,000-device) tier. The tier set is reduced only by an explicit, versioned amendment to this document (§12, R8).
+- **Browser capability:** a GPU-accelerated browser on a mid-range laptop is the rendering target.
+- **Transport:** one persistent connection per viewer (FR-TR-01).
+- **Scope tiers:** 4,280 / 50,000 / 100,000 devices are deliberately demanding and testable figures, not measurements from a field study. All three tiers are in scope: the benchmark harness exercises all three, while the demonstration application targets the building tier. The tier set is reduced only by an explicit, versioned amendment to this document (§12, R8).
 - **Scale unit:** scale is counted in devices (the leaves of the hierarchy); memory and compute also depend on metrics per device and the reading rate (see §7.1).
 - **Benchmark host:** a single fixed host, specified before benchmarking begins.
 - **Measurement environment:** benchmark runs place the simulator, engine, and harness on the fixed host with browsers on the same local network; the demonstration runs the engine and browser together on the mid-range laptop; wide-area network behavior is out of scope.
 - **Topology stability:** the topology is fixed at boot and is not modified while serving.
 - **LOD granularity:** level-of-detail depends on intermediate groups; a flat hierarchy still meets K3 but collapses to large blended entries when zoomed out.
-- **No production deployment** is assumed.
+- **Deployment:** no production deployment is assumed.
 
 ## 10. Out of Scope
 
@@ -256,9 +263,9 @@ Exact wire layouts and the configuration schema are implementation details outsi
 - Occlusion (devices hidden behind other geometry); only in-view selection is performed.
 - Authentication, authorization, and multi-tenant security hardening.
 - Mobile or native (non-browser) clients.
-- Cloud deployment and horizontal scaling; the product is a reproducible showcase, not a production deployment (see §9).
+- Cloud deployment and horizontal scaling; the project is a reproducible showcase, not a production deployment (see §9).
 
-## 11. Product Risks
+## 11. Project Risks
 
 | ID | Risk | Primary mitigation |
 | --- | --- | --- |
@@ -274,11 +281,11 @@ Exact wire layouts and the configuration schema are implementation details outsi
 
 ## 12. Acceptance Criteria
 
-The product is accepted when:
+The project is accepted when:
 
 - All Must functional requirements are demonstrated; any requirement without a dedicated KPI is verified by test.
 - All eleven KPIs (K1–K11) meet their targets on the fixed benchmark host and demo laptop, as recorded in the benchmark report; the browser KPIs (K6, K7, K11) are demonstrated at the building scale (~4,280 devices).
-- Every backend KPI (K1–K5, K8–K10) meets its target at every benchmarked tier (4,280, 50,000, and 100,000 devices); where a KPI gives per-tier targets (K5), each applies at its tier.
+- Every backend KPI (K1–K5, K8–K10) meets its target wherever that target applies, as scoped in §7; K5 has a target for each tier.
 - The §13 deliverables exist and are reproducible.
 - The same engine binary passes both the 4,280-device and 100,000-device benchmarks without code change (G5).
 - Any reduction of the benchmark tier coverage (for example deferring the full-park tier) requires an explicit, versioned amendment to this document and is disclosed in the benchmark report; absent such an amendment, all three tiers remain in scope.

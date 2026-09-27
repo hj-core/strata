@@ -4,9 +4,9 @@
 | --- | --- |
 | Document ID | TDD-001 |
 | Title | Server-Side Hierarchical Spatial Filtering Engine — Technical Design |
-| Version | 0.3.1 |
+| Version | 0.4.0 |
 | Status | Draft |
-| Date | 2026-09-20 |
+| Last Updated | 2026-09-27 |
 | Owner | Project maintainer |
 | Related documents | Upstream: PRD-001 (Product Requirements). Downstream: PLN-001 (Master Execution Sequence). |
 
@@ -37,9 +37,8 @@ Guiding rule: **the browser draws; the server thinks.** All heavy work is perfor
 
 **Constraints (PRD-001 §9).** Carried from PRD-001 §9:
 
-- **Language/runtime:** engine in Rust; browser client in Three.js.
 - **Browser capability:** a WebGL-capable browser on a mid-range laptop is the rendering target.
-- **Transport:** WebSocket, one persistent connection per viewer.
+- **Transport:** one persistent connection per viewer (FR-TR-01).
 - **Scope tiers:** 4,280 / 50,000 / 100,000 devices are all in scope; the demonstration application targets the building tier (~4,280 devices); the tier set is reduced only by an explicit, versioned amendment (PRD §12, R8).
 - **Scale unit:** scale is counted in devices (the leaves of the hierarchy); memory and compute also depend on metrics per device and the reading rate.
 - **Benchmark host:** a single fixed host, specified before benchmarking begins.
@@ -48,7 +47,12 @@ Guiding rule: **the browser draws; the server thinks.** All heavy work is perfor
 - **LOD granularity:** level of detail depends on intermediate groups; a flat hierarchy still meets K3 but collapses to large blended entries when zoomed out.
 - **Deployment:** no production deployment is assumed.
 
-PRD-001 §9 is authoritative.
+PRD-001 §9 is authoritative for these constraints.
+
+**Technology choices (this document).** PRD-001 does not prescribe implementation (§1), so the technology is chosen here:
+
+- **Language/runtime:** engine in Rust; browser client in Three.js (§16).
+- **Wire protocol:** WebSocket with a compact binary frame format (§9.1).
 
 ## 3. Architecture Overview
 
