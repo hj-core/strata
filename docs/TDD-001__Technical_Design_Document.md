@@ -180,7 +180,7 @@ The topology definition is three JSON documents loaded as one source (FR-TD-09):
 | `epsilon` | yes | noise threshold, in the metric's unit (Decision 9) |
 | `freshness_ms` | yes | staleness timeout (FR-IS-03) |
 | `absence` | no (default `normal`) | severity while unavailable, on the `normal`/`advisory`/`warning`/`critical` scale (FR-TD-11, §7.1, Decision 9) |
-| `limits` | no (default `[]`) | array of `{threshold, side, level}`; `level` is on the fixed named scale `normal`, `advisory`, `warning`, `critical` (FR-TD-11, §7.1) |
+| `limits` | no (default `[]`) | array of `{threshold, side, level}`: `threshold` finite in the value's unit, `side` `high` or `low`, `level` on the fixed named scale `normal`, `advisory`, `warning`, `critical` (FR-TD-11, §7.1) |
 
 **Group type library.**
 
@@ -225,7 +225,7 @@ The topology definition is three JSON documents loaded as one source (FR-TD-09):
 | Field | Required | Notes |
 | --- | --- | --- |
 | `epsilon` | yes | noise threshold, in the value's unit — counts for `count` (Decision 9) |
-| `limits` | no (default `[]`) | array of `{threshold, side, level}`; `level` is on the fixed named scale `normal`, `advisory`, `warning`, `critical` (FR-TD-11, §7.1) |
+| `limits` | no (default `[]`) | array of `{threshold, side, level}`: `threshold` finite in the value's unit, `side` `high` or `low`, `level` on the fixed named scale `normal`, `advisory`, `warning`, `critical` (FR-TD-11, §7.1) |
 
 **Topology document.**
 
@@ -314,7 +314,7 @@ The topology definition is three JSON documents loaded as one source (FR-TD-09):
 | `parent` | yes | a group id, or `null` for the single root |
 | `type` | yes | shallow template reference into the device type library (Decision 9, Decision 20) |
 | `position` | yes | `[x, y, z]`, finite |
-| `metrics` | yes | one or more, supplied by `type` — a device node that declares `metrics` is a boot error; at most 65,535, the `u16 metric_slot` ceiling of §4.2 (Decision 7, Decision 20) |
+| `metrics` | yes | one or more, supplied by `type` — a device node that declares `metrics` is a boot error; at most 15,000, so its complete value set — slot mask plus f16 values, ≈31 KB — fits within half the 64 KB message bound (FR-TR-02, §9.4, Decision 7, Decision 20) |
 | `policy` | no | map from this device's metric labels to any subset of `epsilon`, `freshness_ms`, `absence`, `limits`; merge, defaults, and the unknown-label rule are stated in the Metric policy override bullet below (Decision 20) |
 | `contributes_to` | no | map from this device's metric labels to its containing group's channel ids; a metric may name several targets; never carried by a device type (Decision 9) |
 
@@ -496,7 +496,7 @@ A leaf's AABB is the device position (a degenerate point); frustum tests are inc
 | Channel policy key existence | Wherever channels are declared, the companion `policy` covers exactly those ids with `epsilon`; a refining group node's `policy` names only existing channels | Abort boot |
 | Finite positions | Every device position is finite | Abort boot |
 | Device containment | Every declared group `aabb` contains all of its descendant device positions | Abort boot |
-| Metric-count ceiling | Each device's configured metrics ≤ 65,535 (`u16 metric_slot`, §4.2) | Abort boot |
+| Metric-count ceiling | Each device's configured metrics ≤ 15,000, so a complete value set (slot mask plus f16 values, ≈31 KB) stays within half a 64 KB message | Abort boot |
 | Epsilon and freshness | Every metric and channel ε is finite and ≥ 0; every `freshness_ms` is a positive integer | Abort boot |
 | Group channel-count bound | Each group's configured channels ≤ 16 | Abort boot |
 | Aggregate correctness | Brute-force scalar comparison on fixtures | Fail test |
@@ -544,7 +544,7 @@ The semantic n-ary tree has no shared basis with a binary spatial BVH, so the `b
 
 Each group carries a **reserved unitless attention channel** (the group's attention value, reduction `max`), computed in the same bottom-up pass as its configured channels and streamed with the node's entry (FR-TD-11, FR-AG-06). Its value is on the fixed severity scale of normal, advisory, warning, and critical. A device's attention level is the greatest of its metrics' contributions. The scale is the fixed named scale of Decision 9 (FR-TD-11).
 
-- **Severity limits.** A metric or channel may declare a list of limits, each `(threshold, side, level)` on the high and/or low side. A value maps to a level by `level = max over limits of ( fired ? level : 0 )`, where `fired` is `value >= threshold` (high) or `value <= threshold` (low). Limits inherit the value's unit and are validated at boot (finite; level on the fixed severity scale).
+- **Severity limits.** A metric or channel may declare a list of limits, each `(threshold, side, level)` on the high and/or low side. A value maps to a level by `level = max over limits of ( fired ? level : 0 )`, where `fired` is `value >= threshold` (high) or `value <= threshold` (low). Limits inherit the value's unit and are validated at boot (finite threshold; `side` `high`/`low`; level on the fixed severity scale).
 - **Contributions.** A metric contributes its limit level when available, or its absence level when unavailable (per-metric; availability from FR-IS-03). A configured channel contributes its limit level when it has a value.
 - **Composition.** A device's attention level is the max over its metrics' contributions. A group's attention channel is the max over its configured channels' limit levels, its direct devices' attention levels, and its child groups' attention channels. Unavailable values contribute no level; a node with no available values and no nonzero contribution reports normal (0).
 - **Propagation.** The attention channel merges as a `max` channel, order-free and exact, and is always contributed to its parent's attention channel, independent of the configured contributions (FR-TD-06, FR-AG-06).
@@ -642,7 +642,7 @@ scalar value ──► width convert ──► per-value ε filter ──► emi
 
 Keying is by node index, which is sufficient because the index is immutable and a node's kind never changes; a device↔blend transition is different indices (the group node leaves the set, its device leaves enter), each handled as appeared/removed. Reappearance after any gap is treated as **appeared** — the client may have dropped the instance, so a stale baseline would be invalid. Pruning on removal keeps per-session state bounded by the current visible set plus the selected object (FR-TR-04).
 
-Implementation is a dense-integer diff — O(entries) per viewer per frame, allocation-free, no hashing. Per session, a `u32` frame **epoch** array indexed by node detects presence and change eligibility without per-frame clearing (only visible nodes are written), and a `u16` **last-sent** array indexed by value slot holds the f16 wire-domain baseline, with a parallel f32 array for `sum`/`count` slots; removals are found by scanning the previous frame's node list (≤ B), never all N nodes. Baseline advancement on the transport occurs only when a frame is actually written, so latest-wins drop and change suppression compose. Table sizes: ~1 MB per viewer at 100k (~300k device-metric slots at 2 B, plus 100k epochs at 4 B); a group entry's `sum`/`count` slots add 2 B each in the f32 baseline.
+Implementation is a dense-integer diff — O(visible value slots) per viewer per frame, allocation-free, no hashing. Per session, a `u32` frame **epoch** array indexed by node detects presence and change eligibility without per-frame clearing (only visible nodes are written), and a `u16` **last-sent** array indexed by value slot holds the f16 wire-domain baseline, with a parallel f32 array for `sum`/`count` slots; removals are found by scanning the previous frame's node list (≤ B), never all N nodes. Baseline advancement on the transport occurs only when a frame is actually written, so latest-wins drop and change suppression compose. Table sizes: ~1 MB per viewer at 100k (~300k device-metric slots at 2 B, plus 100k epochs at 4 B); a group entry's `sum`/`count` slots add 2 B each in the f32 baseline.
 
 ### 9.4 Frame Layout
 
@@ -669,6 +669,7 @@ Frame (type = 0):
 - `changed_mask` bounds the payload to changed slots; an entry with nothing changed and no attention change is omitted entirely.
 - Attention is sent on change only (Decision 15).
 - A keyframe is the full visible set with every slot present, chunked across frames with the `keyframe`/`keyframe_end` flags when it exceeds a size threshold (default ~64 KB). No wire message exceeds 64 KB; keyframe and dictionary chunks are cut at that bound.
+- **Message filling.** Every message is filled to the 64 KB bound and cut between entries — a frame entry is never split — and the remainder continues in the next message with its own sequence, so a normal diff cycle may span messages. Each message is a complete diff unit: the client applies it directly, and the baseline advances only on the messages actually written (§9.3).
 - Field widths are fixed per reduction: f16 slots use the quiet-NaN pattern `0x7E00`, f32 slots use the f32 quiet NaN. The client derives each slot's width from the shared config (FR-TD-09), so no per-slot type tag is sent on the wire.
 
 ### 9.5 Other Messages
@@ -728,11 +729,13 @@ Each rendered object is coloured by one selected value (FR-CD-03). The default i
 
 ## 11. Performance Budgets
 
+Every budget below is derived at the benchmark topology (measurement scope, §2); each stage scales with the quantity it walks — index nodes, entries, channels and contributors, or value slots.
+
 | Stage | Budget | KPI |
 | --- | --- | --- |
 | Server traversal | ≤ 1.5 ms | K2 |
 | Shared aggregation pass | ≤ 0.5 ms for the benchmark topology's configured channel set; scales with channels configured (16 per group, plus the reserved attention channel) | K9 |
-| Per-viewer encode | ≤ 0.3 ms | — |
+| Per-viewer encode | ≤ 0.3 ms at the benchmark's visible value slots; scales linearly with visible value slots | — |
 | Network + jitter | ≤ 2 ms | — |
 | Browser parse/write | ≤ 3 ms | K6 |
 | Rendering | remaining ~10 ms | K6 |
