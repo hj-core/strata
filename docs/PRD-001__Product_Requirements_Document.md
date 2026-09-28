@@ -4,9 +4,9 @@
 | --- | --- |
 | Document ID | PRD-001 |
 | Title | Server-Side Hierarchical Spatial Filtering Engine for 3D Digital Twin Visualization |
-| Version | 0.3.0 |
+| Version | 0.4.0 |
 | Status | Draft |
-| Last Updated | 2026-09-27 |
+| Last Updated | 2026-09-28 |
 | Owner | Project maintainer |
 | Related documents | Downstream: TDD-001 (Technical Design), PLN-001 (Master Execution Sequence). This document is self-contained. |
 
@@ -178,7 +178,7 @@ Validation conditions for FR-TD-08:
 | FR-BR-02 | Benchmarks shall cover building scale (~4,280), intermediate scale (50,000), and full scale (100,000) devices, plus a concurrent-session run. | M | G5 |
 | FR-BR-03 | Ablation studies shall isolate the contribution of individual optimisations to measured performance. | S | R1, R5 |
 | FR-BR-04 | A benchmark report shall record measured results against every KPI target, with the method, configuration, and host documented so the results are reproducible. | M | G5 |
-| FR-BR-05 | A fixed benchmark topology shall be produced before benchmarking and used unchanged across all runs, defining for each tier the hierarchy, device positions, per-device metric sets, per-group channel definitions and contributions, severity limits and absence levels, and reading rates. It shall be versioned and published with the benchmark report. | M | G5 |
+| FR-BR-05 | A fixed benchmark topology and simulator configuration shall be produced before benchmarking and used unchanged across all runs: the topology defines each tier's hierarchy, device positions, per-device metric sets, per-group channel definitions and contributions, and severity limits and absence levels; the simulator configuration defines each tier's reading rates. Both shall be versioned and published with the benchmark report. | M | G5 |
 
 ## 7. Non-Functional Requirements (KPI Targets)
 
@@ -232,6 +232,7 @@ The engine's byte-level representation of the same values, including exact wire 
 | --- | --- | --- |
 | Topology config | file → simulator / engine / client | Site hierarchy, device positions, per-device metric labels and per-metric units, noise thresholds, freshness timeouts, and the containing group's channels each metric contributes to; per-group aggregate channel definitions and per-group channel contributions; per-metric and per-channel severity limits and per-metric absence severity levels. Every group has an attention value, which is not configurable. |
 | Engine configuration | file → engine | Visibility/LOD parameters: on-screen-size enter/exit thresholds (FR-VS-06) and camera-context timeout (FR-VS-08). |
+| Simulator configuration | file → simulator | Reading rates per tier (FR-BR-05); value models covering noise, steps, spikes, and offline transitions, and the parameters that make traces deterministic (FR-CD-07, FR-BR-04). |
 | Telemetry ingest | simulator / devices → engine | Device identity and metric values at the configured rate. |
 | Camera context | browser → engine, every frame | Camera pose (position and orientation), screen width/height, pixel ratio, field of view. |
 | Inspection target | browser → engine, on selection change | Identity of the rendered object selected for inspection, and deselection. |
@@ -299,5 +300,5 @@ The project is accepted when:
   - **Browser 3D client** with click-to-inspect.
   - **Demo application** integrating simulator → engine → browser.
 - **The benchmark harness.**
-- **The fixed benchmark topology definition** (all three tiers), versioned and published with the benchmark report.
+- **The fixed benchmark topology definition** (all three tiers) **and the fixed benchmark simulator configuration** (all three tiers), versioned and published with the benchmark report.
 - **A benchmark report** covering all three tiers (4,280 / 50,000 / 100,000 devices) and the concurrent-session run.
