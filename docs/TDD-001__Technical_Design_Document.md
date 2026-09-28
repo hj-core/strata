@@ -4,7 +4,7 @@
 | --- | --- |
 | Document ID | TDD-001 |
 | Title | Server-Side Hierarchical Spatial Filtering Engine — Technical Design |
-| Version | 0.6.0 |
+| Version | 0.7.0 |
 | Status | Draft |
 | Last Updated | 2026-09-28 |
 | Owner | Project maintainer |
@@ -129,18 +129,18 @@ The topology definition is three JSON documents loaded as one source (FR-TD-09):
     "std_rack_node": {
       "metrics": [
         { "label": "cpu_temp_1", "unit": "C" },
-        { "label": "cpu_vib", "unit": "mm/s" }
+        { "label": "cpu_vib",    "unit": "mm/s" }
       ],
       "policy": {
-        "cpu_temp_1": { "epsilon": 0.1, "freshness_ms": 5000 },
-        "cpu_vib": { "epsilon": 0.05, "freshness_ms": 2000 }
+        "cpu_temp_1": { "epsilon": 0.1,  "freshness_ms": 5000 },
+        "cpu_vib":    { "epsilon": 0.05, "freshness_ms": 2000 }
       }
     },
 
     "monitored_rack_node": {
       "metrics": [
         { "label": "cpu_temp_1", "unit": "C" },
-        { "label": "cpu_vib", "unit": "mm/s" }
+        { "label": "cpu_vib",    "unit": "mm/s" }
       ],
       "policy": {
         "cpu_temp_1": {
@@ -149,10 +149,10 @@ The topology definition is three JSON documents loaded as one source (FR-TD-09):
           "absence": "advisory",
           "limits": [
             { "threshold": 80, "side": "high", "level": "critical" },
-            { "threshold": 5, "side": "low", "level": "advisory" }
+            { "threshold":  5, "side": "low",  "level": "advisory" }
           ]
         },
-        "cpu_vib": { "epsilon": 0.05, "freshness_ms": 2000 }
+        "cpu_vib":    { "epsilon": 0.05, "freshness_ms": 2000 }
       }
     }
   }
@@ -190,16 +190,16 @@ The topology definition is three JSON documents loaded as one source (FR-TD-09):
   "types": {
     "rack_a": {
       "channels": [
-        {
-          "id": "avg_temp",
-          "unit": "C",
-          "reduction": "mean",
+        { "id": "avg_temp", "unit": "C", "reduction": "mean" }
+      ],
+      "policy": {
+        "avg_temp": {
           "epsilon": 0.2,
           "limits": [
             { "threshold": 35, "side": "high", "level": "warning" }
           ]
         }
-      ]
+      }
     }
   }
 }
@@ -210,15 +210,20 @@ The topology definition is three JSON documents loaded as one source (FR-TD-09):
 | Field | Required | Notes |
 | --- | --- | --- |
 | `version` | yes | library revision; equals the topology's `requires.group` (Decision 9) |
-| `types` | yes | map of group type names to channel templates; a group's `type` resolves here (Decision 9); instantiating a type on a group with no devices is legal and pruned (Decision 21) |
+| `types` | yes | map of group type names to type entries — `channels` (identity: `id`, `unit`, `reduction`) and `policy` (the tunable fields, keyed by channel id); a group's `type` resolves here (Decision 9); instantiating a type on a group with no devices is legal and pruned (Decision 21) |
 
-**Channel fields.**
+**Channel identity fields.**
 
 | Field | Required | Notes |
 | --- | --- | --- |
 | `id` | yes | unique within the group |
-| `reduction` | yes | `sum`, `mean`, `min`, `max`, `count` |
 | `unit` | yes | contributors match (FR-AG-02); for `count`, the unit of the readings tallied — it constrains contributors only, and the value is a dimensionless tally (Decision 9) |
+| `reduction` | yes | `sum`, `mean`, `min`, `max`, `count` |
+
+**Channel policy fields.** One `policy` map per type entry, keyed by channel id: every id in `channels` has an entry, because `epsilon` is required (FR-TD-05); a type entry that omits an id from its `policy`, or names an id absent from `channels`, is a boot error. The Required column applies to a type entry: a group node carries the same shape — with `channels` declared its `policy` covers every id, without `channels` it refines its template's fields — and identity is never overridable (Decision 20).
+
+| Field | Required | Notes |
+| --- | --- | --- |
 | `epsilon` | yes | noise threshold, in the value's unit — counts for `count` (Decision 9) |
 | `limits` | no (default `[]`) | array of `{threshold, side, level}`; `level` is on the fixed named scale `normal`, `advisory`, `warning`, `critical` (FR-TD-11, §7.1) |
 
@@ -229,27 +234,39 @@ The topology definition is three JSON documents loaded as one source (FR-TD-09):
   "version": 1,
   "requires": { "group": 1, "device": 1 },
   "nodes": [
-    { "kind": "group", "id": "site", "parent": null, "channels": [] },
+    {
+      "kind": "group",
+      "id": "site",
+      "parent": null,
+      "channels": []
+    },
 
     {
       "kind": "group",
       "id": "bldg-a",
       "parent": "site",
       "channels": [
-        { "id": "mean_temp", "unit": "C", "reduction": "mean", "epsilon": 0.1 }
-      ]
+        { "id": "mean_temp", "unit": "C", "reduction": "mean" }
+      ],
+      "policy": { "mean_temp": { "epsilon": 0.1 } }
     },
 
-    { "kind": "group", "id": "rack-1", "parent": "bldg-a", "type": "rack_a",
-      "contributes_to": { "avg_temp": ["mean_temp"] },
-      "aabb": [[11.5, 3.0, 7.5], [13.0, 4.0, 8.5]] },
+    {
+      "kind": "group",
+      "id": "rack-1",
+      "parent": "bldg-a",
+      "type": "rack_a",
+      "aabb": [[11.5, 3.0, 7.5], [13.0, 4.0, 8.5]],
+      "policy": { "avg_temp": { "epsilon": 0.3 } },
+      "contributes_to": { "avg_temp": ["mean_temp"] }
+    },
 
     {
       "kind": "device",
       "id": "dev-1",
       "parent": "rack-1",
-      "position": [12.0, 3.5, 8.0],
       "type": "monitored_rack_node",
+      "position": [12.0, 3.5, 8.0],
       "policy": {
         "cpu_temp_1": { "limits": [ { "threshold": 70, "side": "high", "level": "warning" } ] }
       },
@@ -260,8 +277,8 @@ The topology definition is three JSON documents loaded as one source (FR-TD-09):
       "kind": "device",
       "id": "dev-2",
       "parent": "rack-1",
-      "position": [12.5, 3.5, 8.0],
-      "type": "std_rack_node"
+      "type": "std_rack_node",
+      "position": [12.5, 3.5, 8.0]
     }
   ]
 }
@@ -273,7 +290,7 @@ The topology definition is three JSON documents loaded as one source (FR-TD-09):
 | --- | --- | --- |
 | `version` | yes | revision of this topology document; incremented when the topology changes (FR-BR-05 for the benchmark topology) |
 | `requires` | yes (when any node declares `type`) | one entry per type library — `group` and `device`; each supplied library's `version` equals its entry, and a missing library, an unknown type name, or a mismatch is a boot error (Decision 9) |
-| `nodes` | yes | flat list of nodes (Decision 9) |
+| `nodes` | yes | flat list of nodes; only the relative order of siblings is significant — a parent need not precede its children, and subtrees may interleave (Decision 8, Decision 9) |
 
 **Group node fields.**
 
@@ -282,10 +299,11 @@ The topology definition is three JSON documents loaded as one source (FR-TD-09):
 | `kind` | yes | `group` |
 | `id` | yes | unique topology-wide (referenced by `parent`) |
 | `parent` | yes | a group id, or `null` for the single root |
-| `channels` | no | ≤16 local channels, in addition to the reserved attention channel; supplied by `type` when the node declares none |
-| `contributes_to` | no | map from this group's channel ids to its parent's channel ids; a channel may name several targets; never carried by a group type (Decision 9) |
-| `type` | no | shallow template reference into the group type library; a declared `channels` replaces the template's (Decision 9, Decision 20) |
+| `type` | no | shallow template reference into the group type library (Decision 9, Decision 20) |
 | `aabb` | no | `[[min],[max]]`, finite with min ≤ max per axis; contains every descendant device position, checked at boot (Decision 22); never templated |
+| `channels` | no | ≤16 local channels (`id`, `unit`, `reduction`), in addition to the reserved attention channel; supplied by `type` when the node omits the key — an explicit array, `[]` included, replaces the template's channels and `policy` wholesale (Decision 9, Decision 20) |
+| `policy` | no | map from channel ids to any subset of `epsilon`, `limits`; with `channels` declared it covers every id (`epsilon` has no default), without `channels` it refines the template's fields per channel; an id naming no channel of this node is a boot error (Decision 20) |
+| `contributes_to` | no | map from this group's channel ids to its parent's channel ids; a channel may name several targets; never carried by a group type (Decision 9) |
 
 **Device node fields.**
 
@@ -297,16 +315,16 @@ The topology definition is three JSON documents loaded as one source (FR-TD-09):
 | `type` | yes | shallow template reference into the device type library (Decision 9, Decision 20) |
 | `position` | yes | `[x, y, z]`, finite |
 | `metrics` | yes | one or more, supplied by `type` — a device node that declares `metrics` is a boot error; at most 65,535, the `u16 metric_slot` ceiling of §4.2 (Decision 7, Decision 20) |
-| `policy` | no | map from this device's metric labels to any subset of `epsilon`, `freshness_ms`, `absence`, `limits`; merge, defaults, and the unknown-label rule are stated in the Policy override bullet below (Decision 20) |
+| `policy` | no | map from this device's metric labels to any subset of `epsilon`, `freshness_ms`, `absence`, `limits`; merge, defaults, and the unknown-label rule are stated in the Metric policy override bullet below (Decision 20) |
 | `contributes_to` | no | map from this device's metric labels to its containing group's channel ids; a metric may name several targets; never carried by a device type (Decision 9) |
 
 **What the example shows.**
 
 - **Structure.** Three documents: the device library holds `std_rack_node` and `monitored_rack_node`, the group library `rack_a`, and the topology holds one root (`site`) and four descendants; key order inside an object is insignificant, but the order of the `nodes` array defines sibling order (Decision 8).
-- **Inline channels.** `bldg-a` declares `mean_temp` directly; its parent — the root — declares an empty `channels`, so the chain ends there.
-- **Group template.** `rack-1` declares `type: "rack_a"` to inherit `avg_temp`'s properties, and declares `contributes_to` itself: a group type carries channel definitions only, because upward wiring names the parent's channels (Decision 9).
+- **Inline channels.** `bldg-a` declares `mean_temp` directly — its identity in `channels`, its ε in the companion `policy`, because `epsilon` has no default; its parent, the root, declares an explicit empty `channels`, so the chain ends there.
+- **Group template.** `rack-1` declares `type: "rack_a"` to inherit `avg_temp`'s channels and `policy`, refines only its ε to 0.3 with a node-level `policy`, and declares `contributes_to` itself: a group type carries definitions only, never wiring, because upward wiring names the parent's channels (Decision 9, Decision 20).
 - **Device templates.** Both types supply the labels `cpu_temp_1` and `cpu_vib` with the same units, and they differ only in `policy`: `monitored_rack_node` adds an `absence` and two `limits` for `cpu_temp_1` that `std_rack_node` omits, so `dev-2`'s merged metrics fall back to `normal` and `[]`. `dev-1` takes `monitored_rack_node` and declares its contribution map plus a `policy` override on the node — the override replaces `cpu_temp_1`'s two limits with a single 70/high warning limit for that device alone, while its ε and freshness inherit from the type; `dev-2` takes `std_rack_node` and contributes nothing. Labels are device-local, so the two types may carry the same ones (Decision 7, Decision 20).
-- **Contribution chain.** `dev-1.cpu_temp_1` (C) → `rack-1.avg_temp` (C, mean) → `bldg-a.mean_temp` (C, mean): each join matches unit and reduction. `dev-1.cpu_vib` (mm/s) contributes nowhere.
+- **Contribution chain.** `dev-1.cpu_temp_1` (C) → `rack-1.avg_temp` (C, mean) → `bldg-a.mean_temp` (C, mean): every hop matches unit, and the channel-to-channel hop matches reduction. `dev-1.cpu_vib` (mm/s) contributes nowhere.
 - **Boot order.** The libraries load first and each library's `version` is checked against its `requires` entry; group templates then expand before device templates, so contribution targets exist when validation runs (Decision 9, Decision 20).
 - **Declared extent.** `rack-1` declares an `aabb` containing both of its devices; `site` and `bldg-a` declare none, so theirs is derived from their devices (Decision 22).
 
@@ -328,11 +346,12 @@ Configuration requirements:
   - A group declaring neither `type` nor `channels` has no channels (Decision 9).
   - Every device declares a `type`, and its metric set comes from that entry in the device type library; a device node that declares `metrics` is a boot error, as is a `type` that yields zero metrics after expansion (FR-TD-03, Decision 20).
   - Expansion merges the type's identity, the type's `policy` entry, the node's `policy` fields, and the node's `contributes_to` into one metric instance: after boot each instance carries its `label`, unit, noise threshold, freshness timeout, limits, absence, and its contributions — FR-TD-04 requires the label, unit, noise threshold, and freshness timeout of every instance, and its contributions if any (Decision 20).
-  - **Policy override.** A device node may declare `policy`: a map from its metric labels to any subset of `epsilon`, `freshness_ms`, `absence`, `limits`. Each declared field replaces the type entry's value for that label — a field is replaced whole, so an array field is never merged element by element — and each absent field inherits it; `absence` and `limits` absent from both take their defaults. A key naming none of the device's metrics is a boot error, and neither `label` nor `unit` is overridable: identity stays with the type (FR-TD-04, FR-TD-11, Decision 20).
+  - **Metric policy override.** A device node may declare `policy`: a map from its metric labels to any subset of `epsilon`, `freshness_ms`, `absence`, `limits`. Each declared field replaces the type entry's value for that label — a field is replaced whole, so an array field is never merged element by element — and each absent field inherits it; `absence` and `limits` absent from both take their defaults. A key naming none of the device's metrics is a boot error, and neither `label` nor `unit` is overridable: identity stays with the type (FR-TD-04, FR-TD-11, Decision 20).
+  - **Channel policy override.** Wherever channels are declared — a type entry or the node itself — a companion `policy` map keyed by channel id supplies `epsilon` (required) and `limits` (default `[]`) for every declared id; an id the map omits, or one naming no channel of its declaring source — the type entry's `channels` or the node's — is a boot error. A group node may declare `policy` without `channels`, refining its template's fields per channel: a declared field replaces the type's value whole, an absent field inherits it; a node that declares `channels` replaces the template's channels and `policy` together. `policy` never reaches `id`, `unit`, or `reduction` (FR-TD-05, FR-TD-11, Decision 20).
   - Geometry is never templated: a device's `position` and a group's `aabb` belong to the node itself, because absolute coordinates hold only for that instance (Decision 20, Decision 22).
-  - Templates are shallow and single-level: a node may reference one `type` — a group's in the group library, a device's in the device library; a declared `channels` replaces the template's for a group, and a device declares no metric set of its own — its `policy` map refines only the four policy fields, never the metric list or identity. There is no type-extends-type, no per-channel merge, and no element-wise merge inside a policy field (Decision 9, Decision 20).
+  - Templates are shallow and single-level: a node may reference one `type` — a group's in the group library, a device's in the device library; a declared `channels` array replaces the template's channels and `policy` for a group, and a device declares no metric set of its own — its `policy` map refines only the four policy fields, never the metric list or identity. There is no type-extends-type and no per-item merge of channel definitions or metric sets; policy fields refine whole, never element by element (Decision 9, Decision 20).
   - The asymmetry is deliberate: a device's `type` is required, because the simulator configuration addresses device types and no instance ids (§4.2); a group's `type` is optional, because no external configuration addresses groups (Decision 9, Decision 20).
-  - Templates expand at boot before validation: group templates first, then device templates, so a device node's `contributes_to` resolves against its containing group's channels as they stand after the group template (Decision 20).
+  - Templates expand at boot before validation: group templates first — with each group node's own `channels` and `policy` resolved into its channel set — then device templates, so a device node's `contributes_to` resolves against its containing group's channels as they stand after the group template (Decision 20).
   - Expansion is deterministic and identical for the simulator, the engine, and the client (FR-TD-09); the runtime still holds one metric instance per `(device, label)` — no template or kind reaches the runtime (Decision 7, Decision 20).
 - **Hierarchy scope.**
   - The conventional site → building → room → rack levels are not required; the engine models a generic group tree (FR-TD-01). A physically meaningful hierarchy is assumed for useful level-of-detail; a degenerate or flat hierarchy is accepted and collapses to a single blended entry when zoomed out (FR-VS-05, §8).
@@ -473,7 +492,8 @@ A leaf's AABB is the device position (a degenerate point); frustum tests are inc
 | Per-device state-row integrity | Row-offset monotonicity; row `d` aligned to leaf-order device `d`; total = Σ metrics/device | Abort boot |
 | Contribution unit and reduction consistency | Each contributor's declared unit matches the channel's unit; each contributing channel's reduction matches the receiving channel's | Abort boot |
 | Contribution wiring existence | Every device's `contributes_to` key names one of its metrics and each target a channel in its containing group; every group's `contributes_to` key names one of its own channels and each target a channel in its parent | Abort boot |
-| Policy key existence | Every type entry's `policy` covers exactly its `metrics` labels, each entry carrying `epsilon` and `freshness_ms`; every device's `policy` key names one of its metrics | Abort boot |
+| Metric policy key existence | Every device type entry's `policy` covers exactly its `metrics` labels, each carrying `epsilon` and `freshness_ms`; every device node's `policy` key names one of its metrics | Abort boot |
+| Channel policy key existence | Wherever channels are declared, the companion `policy` covers exactly those ids with `epsilon`; a refining group node's `policy` names only existing channels | Abort boot |
 | Finite positions | Every device position is finite | Abort boot |
 | Device containment | Every declared group `aabb` contains all of its descendant device positions | Abort boot |
 | Metric-count ceiling | Each device's configured metrics ≤ 65,535 (`u16 metric_slot`, §4.2) | Abort boot |
@@ -839,7 +859,7 @@ Each decision states its decision in the first sentence, gives labelled aspects 
 | 1 | One hierarchy serves both visibility and aggregation; frontier ordered by exact projected height | §2, §4.1, §5.1, §5.2, §8.2–§8.4, §13 |
 | 2 | Aggregation by accumulator propagation over per-group channels | §7 |
 | 3 | Stateful per-viewer change suppression | §9 |
-| 4 | Per-group local channels with explicit contributions | §2, §3.1, §4.1, §4.3, §5.2, §6, §7 |
+| 4 | Per-group local channels — identity and policy — with explicit contributions | §2, §3.1, §4.1, §4.3, §5.2, §6, §7 |
 | 5 | Aggregation execution: always-on 60 Hz background pass | §2, §4.3, §7 |
 | 6 | Attention channel (severity and absence) | §3.1, §4.3, §7.1, §9.2, §9.3, §13 |
 | 7 | Metric identity and state layout: device-local labels, per-device instances, device-major state | §2, §4.1, §4.2, §4.3, §5.2, §5.3, §6, §9.4 |
@@ -855,7 +875,7 @@ Each decision states its decision in the first sentence, gives labelled aspects 
 | 17 | Client rendering: InstancedMesh over a pre-allocated VBO | §2, §10.1 |
 | 18 | Technology stack: Rust engine, simulator, and harness; Three.js client over WebGL; WebSocket binary transport; Vite/TypeScript demo tooling | §2, §3, §9.1, §15 |
 | 19 | Engine configuration defaults: budget hysteresis Δ = 10% of `B`; camera-context timeout 1 s | §4.4, §8.1, §8.3 |
-| 20 | Device type templates: the device type library supplies a device's `metrics` and its type-level `policy`; a device node refines policy fields per label; expanded at boot before validation | §4.1, §14.2 |
+| 20 | Type templates and policy overrides: the type libraries supply a device's `metrics` and a group's `channels` with their `policy`; a node refines policy fields per key; expanded at boot before validation | §4.1, §14.2 |
 | 21 | Group retention and degenerate LOD boxes: prune groups with no device descendant bottom-up; degenerate groups bypass the size threshold | §4.1, §4.3, §5.2, §8.2, §8.3, §13 |
 | 22 | Declared group extents: optional per-group `aabb` with boot containment; geometry box (declared or derived) for culling and drawing, LOD box (derived) for projected height | §4.1, §4.3, §5.2, §5.3, §8.2, §10, §13 |
 | 23 | Simulator operating parameters: rates and value models in a unit-keyed simulator profile — the simulator's configuration file — versioned with the report | §4.2 |
@@ -894,6 +914,7 @@ Each group node defines its own local channels — up to 16, in addition to its 
 **Implements:** PRD-001 FR-TD-05, FR-TD-06, FR-TD-08, FR-AG-01.
 
 - **Local channel identity.** A channel's meaning is local to its group; there is no site-wide channel catalogue. The engine validates units per configured contribution; the client resolves a group entry's channel meanings per group.
+- **Identity and policy.** A channel's `id`, `unit`, and `reduction` are its identity, declared only where the channel set is declared; `epsilon` and `limits` are its policy, carried in a companion `policy` map keyed by channel id — supplied in full where the channel set is declared on the node, and refinable per channel on a node that inherits it (Decision 20).
 - **Explicit contributions, default none.** A group contributes nothing to its parent unless configured (FR-TD-06).
 - **Same-reduction contributions.** A channel may contribute only to a parent channel of the same reduction (boot-validated), so a group's value is the canonical subtree reduction.
 - **`mean` and `count`.** `mean` is carried as `(sum, count)` and merged as an accumulator, exact over the subtree's available readings; the wire carries the finalised scalar. `count` is the total number of available contributing readings in the subtree, merged from child `count` channels by summation (FR-AG-01).
@@ -901,7 +922,7 @@ Each group node defines its own local channels — up to 16, in addition to its 
 - **Terminology.** The canonical term is **aggregate channel**.
 - **Reserved attention.** The reserved attention channel is not addressable in configured contributions; it propagates implicitly.
 - **SIMD applicability.** 16 channels ≈ one 512-bit vector; permute/gather plus masked reduce, with effectiveness depending on wiring regularity.
-- **Config volume.** Peer groups repeat identical channel definitions, which templating by group type removes; wiring is declared per node, so peers repeat it — one map per contributing device and one per group against a device-dominated file (§14.2). Metric definitions are the larger volume and are templated by device types (Decision 20); per-device wiring, and the optional `policy` overrides a site opts into, are the price of keeping both libraries free of context.
+- **Config volume.** Peer groups repeat identical channel definitions, which templating by group type removes; wiring is declared per node, so peers repeat it — one map per contributing device and one per group against a device-dominated file (§14.2). Metric definitions are the larger volume and are templated by device types (Decision 20); per-node wiring, and the optional `policy` overrides a site opts into on either kind of node, are the price of keeping both libraries free of context.
 - **Alternatives rejected.** A `published` flag and a noop channel — all configured channels are intended aggregates, the per-frame sender logic governs transmission, and contributions are resolved at boot, so no target-resolution branch is required; a status/coverage channel — subsumed by per-metric absence.
 
 ### Decision 5 — Aggregation execution
@@ -946,7 +967,7 @@ Metric identity is the per-device instance `(device, label)`; labels are chosen 
 
 Canonical child order is the order in which children are declared in the config, and the index carries a per-node child count for O(1) degree.
 
-- **Child order.** Children are an ordered sequence; the preorder DFS visits them in declaration order. This order defines node indices (wire identity, Decision 11), leaf order (CSR row order and the per-channel offset lists), the canonical float reduction order (Decision 14), and the frontier tie-break. It is server-side only: the client does not replay the build.
+- **Child order.** Children are an ordered sequence; the preorder DFS visits them in declaration order. This order defines node indices (wire identity, Decision 11), leaf order (CSR row order and the per-channel offset lists), the canonical float reduction order (Decision 14), and the frontier tie-break. In the config only sibling order is significant: a parent need not precede its children, and subtrees may interleave; parent-first belongs to the derived index (§4.3). It is server-side only: the client does not replay the build.
 - **Child enumeration.** Node shape: `subtree_size` (node count) and `child_count`. `first_child = index + 1` (parent-first preorder over emitted nodes; excluded groups never intervene) and `next_sibling = sibling + subtree_size` are derived, not stored. `deg(v)` is O(1), so the expansion-budget check `entries − 1 + deg(v) ≤ B` is O(1) even for a flat hierarchy with ~100k children; enumeration is O(deg) and only runs when `deg ≤ B`.
 - **Subtree-size units.** `subtree_size` is a node count.
 - **Invariant.** Boot checks that `child_count` equals the emitted direct children and that `first_child = index + 1`; the contiguity scan confirms `subtree_size`.
@@ -958,15 +979,15 @@ The topology definition is three JSON documents — the group and device type li
 
 - **Hierarchy.** A flat `nodes` array; each node has `kind` (`group`/`device`), `id` (topology-unique), and `parent` (null for the single root). A pre-pass resolves templates, buckets children by parent in list order, and validates the tree; the preorder DFS then runs in that order.
 - **Metrics.** Per metric instance: `label` (device-local, unique), `unit`, `epsilon`, and `freshness_ms` are required; `absence` and `limits` are optional (default `normal` / `[]`); its contributions come from the device node's `contributes_to` map. A type entry splits these into `metrics` (identity) and a label-keyed `policy` map covering every label; a device node refines that map per label (§4.1, Decision 20).
-- **Channels.** Per group: at most 16, each with `id` (group-local, unique), `reduction`, `unit`, and `epsilon` required; `limits` optional. `count` is unit-typed like any other channel — its unit names the readings tallied and constrains contributors only, while the channel's value, ε, and limits are counts and the client shows the tally with no unit (FR-CD-05).
+- **Channels.** Per group: at most 16; per channel `id` (group-local, unique), `unit`, and `reduction` are required identity, with `epsilon` required and `limits` optional (default `[]`) in its `policy` entry — companion to the channel set wherever it is declared. `count` is unit-typed like any other channel — its unit names the readings tallied and constrains contributors only, while the channel's value, ε, and limits are counts and the client shows the tally with no unit (FR-CD-05).
 - **Wiring.** Both directions are node-level `contributes_to` maps and neither type library carries them: a device node maps its metric labels to its containing group's channel ids (FR-TD-04), a group node maps its channel ids to its parent's channel ids — each map names another node's namespace. Both default none; fan-out and fan-in are allowed, and a channel may feed several parent channels (same reduction). A 17th channel is a boot error.
 - **Limits and absence.** Fixed named scale `normal`/`advisory`/`warning`/`critical`; a limit is `{threshold, side, level}` with the threshold in the value's unit, fired by `>=` (high) or `<=` (low), and a value's level is the max over fired limits; `absence` is per metric, default normal. Attention is stored as one `u8` per group and one per device in the double-buffered snapshot.
 - **Value validity.** `epsilon` is finite and ≥ 0 on every metric and channel; `freshness_ms` is a positive integer; violations abort boot (§4.1).
 - **Units.** Opaque strings compared by exact match.
-- **Format and templates.** JSON only, in three documents: the two type libraries and the topology document. Shallow single-level templates (group library for channels, device library for metrics): a node may reference one `type`; a group's declared `channels` replaces the template's, and a device declares no metric set of its own (Decision 20).
+- **Format and templates.** JSON only, in three documents: the two type libraries and the topology document. Shallow single-level templates (group library for channels, device library for metrics): a node may reference one `type`; a group's declared `channels` array replaces the template's channels and `policy`, a `policy`-only group declaration refines it per channel, and a device declares no metric set of its own (Decision 20).
 - **Validation order.** Template resolution precedes FR-TD-08 validation; diagnostics name the source (template or node).
 - **Version contract.** Each type library carries its own `version`; a topology that declares a `type` carries a `requires` entry per library, so the three documents move as one versioned definition while each library versions independently, and a missing library or an entry mismatch aborts boot (FR-TD-09, FR-BR-05).
-- **Alternatives rejected.** Type-extends-type inheritance and per-channel merge — templates stay shallow and single-level.
+- **Alternatives rejected.** Type-extends-type inheritance and per-item merge of channel definitions — templates stay shallow and single-level; per-field policy refinement is the merge that remains (Decision 20).
 
 ### Decision 10 — Index layout for channels/contributions; aggregation direction
 
@@ -1058,16 +1079,16 @@ The entry-budget hysteresis band defaults to 10% of `B`, and the camera-context 
 - **Camera timeout.** A last known camera context is reused until the 1 s timeout, after which that viewer's updates are held (§8.1).
 - **Alternatives rejected.** No budget band — unrelated scene contents would flip a group between blended and detailed at the budget edge (§8.3); no camera-context timeout — a stale context would be reused indefinitely, against K11 freshness.
 
-### Decision 20 — Device type templates
+### Decision 20 — Type templates and policy overrides
 
-A device references an entry in the device type library that supplies its `metrics` and its type-level `policy`, which the device node's own `policy` may refine per label and per field; templates expand at boot, before validation, so the runtime still holds one metric instance per `(device, label)` (Decision 7).
+A device references an entry in the device type library that supplies its `metrics` and its type-level `policy`, a group references an entry in the group type library that supplies its `channels` and its `policy`, and either node's own `policy` may refine its entry per key and per field; templates expand at boot, before validation, so the runtime still holds one metric instance per `(device, label)` (Decision 7).
 
-- **Scope.** The group library names channel templates for groups; the device library names metric templates for devices. A group's `type` resolves only in the group library, a device's only in the device library; an unknown name, a missing library, an entry mismatch with `requires`, a mismatched container, or a type entry that yields no metric after expansion is a boot error. A type entry's `policy` covers every label in its `metrics`; a type entry that omits a label from its `policy`, or names a label absent from `metrics`, is a boot error.
-- **Expansion order.** Group templates resolve first, then device templates, so a device node's `contributes_to` resolves against its containing group's channels as they stand after the group template; a missing target is a boot error.
-- **Override rule.** A group's declared `channels` replace the template's wholesale, with no per-item merge; a device declares no metric set of its own, so the device library entry is the only source of its metric list and identity, while its `policy` map refines each of `epsilon`, `freshness_ms`, `absence`, `limits` per label — a declared field replaces the type's value whole, an absent field inherits it, and a key naming none of the device's metrics is a boot error (§4.1).
-- **Identity vs policy.** `label` and `unit` stay with the type: labels bind device-local identity (Decision 7) and unit matching gates every contribution (FR-AG-02), so no node override can disturb either. The four policy fields are deployment tuning — a site retunes a threshold on one device without forking its type (FR-TD-04, FR-TD-11).
+- **Scope.** The group library names channel templates for groups; the device library names metric templates for devices. A group's `type` resolves only in the group library, a device's only in the device library; an unknown name, a missing library, an entry mismatch with `requires`, a mismatched container, or a device type entry that yields no metric after expansion is a boot error. A device type entry's `policy` covers every label in its `metrics`, a group type entry's every id in its `channels`; an entry that omits a key, or names one outside its identity set, is a boot error.
+- **Expansion order.** Group templates resolve first — with each group node's own `channels` and `policy` resolved into its channel set — then device templates, so a device node's `contributes_to` resolves against its containing group's channels as they stand after the group template; a missing target is a boot error.
+- **Override rule.** A group's declared `channels` array replaces the template's channels and its `policy` wholesale, with no per-item merge of definitions; a group node's `policy` alone refines the template's fields per channel. A device declares no metric set of its own, so the device library entry is the only source of its metric list and identity, while its `policy` map refines each of `epsilon`, `freshness_ms`, `absence`, `limits` per label. In either refinement a declared field replaces the type's value whole, an absent field inherits it, and a key naming none of the node's channels or metrics is a boot error (§4.1).
+- **Identity vs policy.** Identity stays with the declaring source in both libraries: a metric's `label` binds device-local identity (Decision 7) and its `unit` gates every contribution (FR-AG-02); a channel's `id`, `unit`, and `reduction` define what the channel computes — no `policy` field reaches either kind. The policy fields — `epsilon`, `freshness_ms`, `absence`, `limits` for a metric, `epsilon`, `limits` for a channel — are deployment tuning: a site retunes a threshold on one device or one group without forking a type (FR-TD-04, FR-TD-05, FR-TD-11).
 - **Sharing.** Expansion is deterministic from an unchanged topology, so the simulator, the engine, and the client derive the same identities (FR-TD-09).
-- **Alternatives rejected.** A runtime kind lookup — expansion completes at boot and the engine consumes per-device `(device, label)` instances (Decision 7); type inheritance or composed types — templates stay shallow and single-level, mirroring the group library (Decision 9); template-provided positions — a device's position is its own (FR-TD-03); a per-item merge of template and node fields for metric sets — whole-array replacement keeps every diagnostic attributable to one source, and the policy override preserves that by naming the winning source per field; inline metric declarations on a device — every metric set lives in the device library, so the simulator configuration addresses types and no instance ids (§4.2).
+- **Alternatives rejected.** A runtime kind lookup — expansion completes at boot and the engine consumes per-device `(device, label)` instances (Decision 7); type inheritance or composed types — templates stay shallow and single-level, mirroring the group library (Decision 9); template-provided positions — a device's position is its own (FR-TD-03); a per-item merge of template and node fields for metric sets and channel sets — whole-array replacement keeps every diagnostic attributable to one source, and a per-field policy refinement preserves that by naming the winning source per field; inline metric declarations on a device — every metric set lives in the device library, so the simulator configuration addresses types and no instance ids (§4.2).
 
 ### Decision 21 — Group retention and degenerate LOD boxes
 
