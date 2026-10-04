@@ -4,9 +4,9 @@
 | --- | --- |
 | Document ID | TDD-001 |
 | Title | Server-Side Hierarchical Spatial Filtering Engine — Technical Design |
-| Version | 0.10.0 |
+| Version | 0.12.0 |
 | Status | Draft |
-| Last Updated | 2026-10-03 |
+| Last Updated | 2026-10-04 |
 | Owner | Project maintainer |
 | Related documents | Upstream: PRD-001 (Product Requirements). Downstream: PLN-001 (Master Execution Sequence). |
 
@@ -102,7 +102,7 @@ Three paths make up the pipeline: the **boot path**, which runs once before serv
 3. **Aggregation** reads the state table (metric values) and the index (the boot-compiled contribution plan, Decision 10) — and nothing per-viewer — then writes each group's channels and attention into the write buffer and swaps buffers to publish the frame's snapshot (§7).
 4. **Camera context** — each client sends its camera pose and screen geometry every frame, and its selected node index on selection change; the transport passes both to the visibility engine (§9.5).
 5. **Visibility** reads the index (geometry boxes, LOD boxes, subtree sizes, child counts), the camera context from step 4, and the per-group availability bit published with step 3's snapshot — and no values — then produces that viewer's bounded entry cut of at most `B` entries (§8.2).
-6. **Encode** — per viewer, reads three inputs: the entry cut from step 5 (which entries exist), the aggregate snapshot from step 3 (a group entry's channel values), and the state table directly (a device entry's metric values via `state_offset`). It converts each value to its slot's wire width — f16, or f32 for `sum`/`count` — applies the per-value ε filter (metric ε from the metric-def array, channel ε from the channel-def array, §4.3), tests device-slot availability against the frame clock while a group entry's no-value channels come from the step-3 snapshot, suppresses unchanged slots against the last-sent baseline, and sends the selected object at full fidelity (§9.2, §9.3).
+6. **Encode** — per viewer, reads three inputs: the entry cut from step 5 (which entries exist), the aggregate snapshot from step 3 (a group entry's channel values), and the state table directly (a device entry's metric values via the leaf's `row index`, §4.3.1). It converts each value to its slot's wire width — f16, or f32 for `sum`/`count` — applies the per-value ε filter (metric ε from the metric-def array, channel ε from the channel-def array, §4.3), tests device-slot availability against the frame clock while a group entry's no-value channels come from the step-3 snapshot, suppresses unchanged slots against the last-sent baseline, and sends the selected object at full fidelity (§9.2, §9.3).
 7. **Transport** writes one WebSocket binary frame for that viewer (§9.4); the session baseline advances only on an actual socket write (§9.2, §9.3).
 8. **Render** — the client writes instance transforms and colours into the pre-allocated VBO and draws the `InstancedMesh` (§10.1).
 
@@ -377,42 +377,36 @@ Three structural properties hold (R1), each checked at boot (§5.3), alongside t
 2. **Parent-first layout** — a parent always precedes its descendants.
 3. **Skip-offset pruning** — each internal node stores the size of its subtree, enabling a whole group to be skipped or emitted without descending.
 
-The engine separates its memory by access pattern into three regions: the **index** (the node array plus the boot-written global metric-def, channel-def, limit, and contribution arrays), the **state table**, and the **per-frame aggregate buffers**:
+The engine separates its memory by access pattern into three regions: the **index** (the node-indexed arrays plus the boot-written global metric-def, channel-def, limit, and contribution arrays), the **state table**, and the **per-frame aggregate buffers**:
 
 | Region | Contents | Written | Read |
 | --- | --- | --- | --- |
-| Index | **Node fields:** kind, geometry box, LOD box, child access + subtree size, channel-def slice `(channel_base, channel_count)`, contribution sources (per channel), leaf state offset. **Global arrays:** metric-def, channel-def, limit, contribution | Once at boot | Every frame: per viewer (visibility, encode); once per frame, shared (aggregation) |
+| Index | **Node fields:** kind, geometry box, LOD box, child access + subtree size, channel-def slice `(channel_base, channel_count)`, contribution sources (per channel), row index. **Global arrays:** metric-def, channel-def, limit, contribution | Once at boot | Every frame: per viewer (visibility, encode); once per frame, shared (aggregation) |
 | State table | Latest value and frame-clock arrival stamp per `(device, metric)`, plus the per-device `row_offsets` array; availability derived per pass | Continuously, at ingest | Once per frame, per group (aggregation); per viewer, per device entry (encode) |
 | Aggregate buffers | Per-group per-channel accumulators (including the reserved attention channel) for groups retained in the index; per-device attention level; one availability bit per retained group | Once per frame | Per viewer, per frame |
 
 #### 4.3.1 Index
 
-**Node-indexed arrays.** Each node column is an array indexed by the node index: node `i`'s record is element `i` of every column. One column per node field:
+- **Node-indexed arrays.** Each node field has an array indexed by the node index: node `i`'s record is element `i` of every array, laid out in structure-of-arrays form to keep traversal cache-friendly. The array position is the node's index and identity (Decision 11), so it is not stored redundantly. Nodes reference state by offset and range, never by value.
 
-| Array | Element type | Elements | Read by | Purpose |
+| Array | Element | Type | Purpose | Note |
 | --- | --- | --- | --- | --- |
-| Kind | enum (leaf device / internal group) | one per node | Visibility | Finalise a leaf as a device instance and a group as a group entry; kind is stored directly rather than inferred from subtree size, which separates the two only because device-less groups are pruned (§5.2, §8.2, Decision 21). |
-| Geometry box | `[f32; 6]` — AABB min/max | one per node | Visibility | Frustum test and the extent the client draws; the declared `aabb` when present, else the derived box; contains every descendant device position and declared `aabb` (Decision 22). |
-| LOD box | `[f32; 6]` — AABB min/max | one per node | Visibility | Projected on-screen height, expansion order, and the entry-budget ranking; always the union of the node's devices' positions (Decision 22). |
-| Subtree size | integer (node count) | one per node | Visibility | Subtree bounds and skip-offset pruning; `skip_index = index + subtree_size` is derived, not stored. Node count only — no device-count extent is needed (aggregation uses per-channel offset lists, Decision 7). |
-| Child access | `child_count` (integer); sibling and skip links derived | one per node | Visibility | `child_count` gives `deg(v)` in O(1) for the expansion-budget check; `first_child = index + 1` and `next_sibling = sibling + subtree_size` are derived, not stored (Decision 8). |
-| Channel definitions | `(channel_base, channel_count)` (integers) | one per node | Aggregation, Encoder | A slice `channel_def[channel_base .. +channel_count]` of the global channel-def array: per channel, `unit`, `reduction`, `epsilon`, `(limit_base, limit_count)` into the limit array, and `(contrib_base, contrib_count)` into the contribution array. ≤16 per group, fixed at boot. |
-| Leaf state offset | integer | one per leaf (device) | Encoder | Start offset of the device's row in the state table. |
+| kind | leaf device or internal group | enum (`u8`) | Visibility | Finalise a leaf as a device instance and a group as a group entry; kind is stored directly rather than inferred from subtree size, which separates the two only because device-less groups are pruned (§5.2, §8.2, Decision 21). |
+| geometry box | AABB min/max | `[f32; 6]` | Visibility | Frustum test and the extent the client draws; the declared `aabb` when present, else the derived box; contains every descendant device position and declared `aabb` (Decision 22). |
+| LOD box | AABB min/max | `[f32; 6]` | Visibility | Projected on-screen height, expansion order, and the entry-budget ranking; always the union of the node's devices' positions (Decision 22). |
+| subtree size | node count | `u32` | Visibility | Subtree bounds and skip-offset pruning; `skip_index = index + subtree_size` is derived, not stored. Node count only — no device-count extent is needed (aggregation uses per-channel offset lists, Decision 7). |
+| child access | `child_count` | `u32` | Visibility | `child_count` gives `deg(v)` in O(1) for the expansion-budget check; `first_child = index + 1` and `next_sibling = sibling + subtree_size` are derived, not stored (Decision 8). |
+| channel definitions | `(channel_base, channel_count)` | `[u32; 2]` | Aggregation, Encoder | A slice `channel_def[channel_base .. +channel_count]` of the global channel-def array; ≤16 per group, fixed at boot. |
+| row index | start of the node's row: state table (leaf) or accumulator lanes (group) | `u32` | Aggregation, Encoder | For a group the row length is its channel count; for a leaf the same offset addresses `values` and metric-def. |
 
-- The **node array** is a flat, parent-first, preorder array in structure-of-arrays form to keep traversal cache-friendly; the array position is the node's index and identity (Decision 11), so it is not stored redundantly. Nodes reference state by offset and range, never by value. The per-node field set is listed in the node-indexed arrays table above.
+- **Non-node-indexed arrays.** These four boot-written global arrays are not indexed by node index: each is reached from a node-indexed array or through a range inside another entry. Global attribute data lives in boot-written arrays alongside the node-indexed arrays; variable-length per-node data lives in global arrays addressed by ranges rather than inlined:
 
-**Non-node-indexed arrays.** The four global arrays are not node-indexed — a node column holds the `(channel_base, channel_count)` pair that addresses the channel-def array, and the ranges inside a channel-def or metric-def entry address the limit and contribution arrays. Global attribute data lives in boot-written arrays alongside the node array; variable-length per-node data lives in global arrays addressed by ranges rather than inlined:
-
-| Array | Element type (per-entry fields) | Addressing and elements |
-| --- | --- | --- |
-| Global **metric-def array** | `epsilon` (f32), `freshness_ms` (u32), `absence` (u8), and the metric's `(limit_base, limit_count)` into the limit array — ~16 B per entry | one entry per metric slot, in the same device-major slot order as the `values` array, so one state offset addresses both |
-| Global **channel-def array** | `unit`, `reduction`, `epsilon`, `limit_base`, `limit_count`, `contrib_base`, `contrib_count` | one entry per configured channel; a group's channels are contiguous via its `(channel_base, channel_count)` |
-| Global **limit array** | `{threshold, side, level}` | one entry per limit; `(limit_base, limit_count)` slices from metric-def and channel-def entries |
-| Global **contribution array** | one entry per source, tagged `seed` (source = state offset) or `merge` (source = contributing channel-def index) | a channel's sources are contiguous via its `(contrib_base, contrib_count)`, indexed by target channel (pull, Decision 10) |
-
-A metric-def entry's fields are the operands of the encode ε filter, the freshness check, and the attention pass (§6, §7.1, §9.2).
-
-The aggregation plan *is* this contribution array: the reverse scan reduces each channel's source list — seeds in device-leaf order, then merges in child order — so the reduction is a single vectorisable list and its order is explicit for exact `sum`/`mean` (Decision 14). A seed contributes according to the target channel's reduction — the reading's value for `sum`, `mean`, `min`, and `max`, and `1` for `count` — while a merge adds the child channel's finalised accumulator (FR-AG-01, Decision 10). The reserved attention channel is a per-group accumulator slot outside the channel-def array and is never a contribution target.
+| Array | Element | Type | Reached from | Note |
+| --- | --- | --- | --- | --- |
+| metric-def | `epsilon` (f32), `freshness_ms` (u32), `absence` (u8), and the metric's `(limit_base, limit_count)` (`u32` each) into the limit array | struct (~20 B) | the `row index` of a leaf — one slot index addresses both `values` and metric-def | one entry per metric slot, in the same device-major slot order as the `values` array; its fields are the operands of the encode ε filter, the freshness check, and the attention pass (§6, §7.1, §9.2) |
+| channel-def | `unit`, `reduction`, `epsilon`, `limit_base`, `limit_count`, `contrib_base`, `contrib_count` (`u32` each) | struct | the node's channel definitions field — the `(channel_base, channel_count)` pair | one entry per configured channel; a group's channels are contiguous within its slice |
+| limit | `{threshold f32, side u8, level u8}` | struct | `(limit_base, limit_count)` ranges inside a metric-def or channel-def entry | one per limit |
+| contribution | tagged `seed` (source = `u32` state offset) or `merge` (source = `u32` contributing channel-def index) | tagged union | `(contrib_base, contrib_count)` ranges inside a channel-def entry | one entry per source; contiguous per channel, in canonical reduction order (Decision 14); indexed by target channel (pull, Decision 10) |
 
 #### 4.3.2 State table
 
@@ -420,15 +414,15 @@ The aggregation plan *is* this contribution array: the reverse scan reduces each
 
 | Array | Element type | Elements |
 | --- | --- | --- |
-| `values` | 64-bit slot `{f32 value, u32 arrival_ms}` — one atomic word per reading | one per `(device, metric)` slot — `Σ metrics/device`, ~300,000 at the full tier |
+| `values` | 64-bit slot `{value f32, arrival_ms u32}` — one atomic word per reading | one per `(device, metric)` slot — `Σ metrics/device`, ~300,000 at the full tier |
 | `row_offsets` | `u32` | `N+1` device-row boundaries |
 
 - The **state table** is separate from the index and laid out **device-major in CSR form**: a `values` array of **64-bit slots** plus a per-device `row_offsets` array.
-  - **Slot.** Each slot is `{f32 value, u32 arrival_ms}` — one atomic word per reading. The `value` boot-initialises to a quiet NaN and carries source precision (§4.5); f16 quantisation happens only in transport (§9.2). The `arrival_ms` is a **frame-clock arrival stamp**, recorded while the frame clock advances once per frame's opening (§3.2), used only for freshness.
+  - **Slot.** Each slot is `{value f32, arrival_ms u32}` — one atomic word per reading. The `value` boot-initialises to a quiet NaN and carries source precision (§4.5); f16 quantisation happens only in transport (§9.2). The `arrival_ms` is a **frame-clock arrival stamp**, recorded while the frame clock advances once per frame's opening (§3.2), used only for freshness.
   - **Ordering.** Devices follow index leaf order, and each device's declared metrics are contiguous within its row in local-slot (declaration) order. Labels are device-local (§4.1), so a slot is meaningful only within its device and there is no global metric column.
   - **Addressing.** A device's row is `values[row_offsets[d] .. row_offsets[d+1]]`; a group's devices occupy a contiguous range of rows, so their values occupy one contiguous block. A device's whole value set is contiguous, which suits the per-entry encode path (§9.3). The row and CSR layout are fixed by Decision 7; the 64-bit slot by Decision 16.
   - **Aggregation gather.** At boot the compiler records, per channel, the sorted absolute offsets of its contributing metric instances, so the aggregation pass walks a bounded, prefetch-friendly gather inside that block (FR-AG-02, K9); a metric feeding several channels appears in several such lists.
-- **Sizes.** Rows are exact: a device's compact row holds only the metrics it declares, so there are no unused slots and the table is `Σ metrics/device` 8-byte slots plus `N+1` `u32` row offsets (~400 KB of offsets at 100k). At ~3 metrics/device the full-tier table is ~300,000 slots (~2.4 MB: the f32 value plus the u32 frame-clock stamp). The parallel metric-def array holds one ~16-byte entry per slot (~4.8 MB at 300,000 metrics), boot-written and immutable.
+- **Sizes.** Rows are exact: a device's compact row holds only the metrics it declares, so there are no unused slots and the table is `Σ metrics/device` 8-byte slots plus `N+1` `u32` row offsets (~400 KB of offsets at 100k). At ~3 metrics/device the full-tier table is ~300,000 slots (~2.4 MB: the f32 value plus the u32 frame-clock stamp). The parallel metric-def array holds one ~20-byte entry per slot (~6.0 MB at 300,000 metrics), boot-written and immutable.
 
 #### 4.3.3 Aggregate buffers
 
@@ -436,12 +430,12 @@ The aggregation plan *is* this contribution array: the reverse scan reduces each
 
 | Array | Element type | Elements |
 | --- | --- | --- |
-| Channel accumulators (two buffers) | the accumulator for the channel's reduction (`sum`, `mean`, `min`, `max`, `count`) | one per retained group × local channel (≤16), per buffer |
-| Attention levels | level on the fixed severity scale (normal, advisory, warning, critical) | one per device |
-| Availability bits | 1 bit | one per retained group |
+| channel accumulators (two buffers) | the accumulator for the channel's reduction (`sum`, `mean`, `min`, `max`, `count`) | one per retained group × local channel (≤16), per buffer |
+| attention slots (two buffers) | `u8` on the fixed severity scale (normal, advisory, warning, critical) | one per index node — the group's reserved channel or the device's level — per buffer |
+| availability bits | 1 bit | one per retained group |
 
 - **Channel accumulators** are stored per group for its local channels and double-buffered: the frame reads one buffer while the sweep writes the other, then swaps (§7, Decision 5).
-- Per-device attention levels and one availability bit per retained group complete the region (overview table above).
+- **Addressing.** The region is node-indexed: a group's `row index` (§4.3.1) is its lane start in the accumulator buffer with length `channel_count`; attention holds one slot per index node; one availability bit per retained group sits at the group's node index. Both sides share one boot-fixed layout, so one set of offsets resolves either side.
 
 ### 4.4 Engine Configuration
 
@@ -473,7 +467,7 @@ The simulator is a device-level reading producer. It emits one ingest record per
 
 Fields derived from the topology — position, unit, epsilon, group ids — are not emitted; the simulator, the engine, and the client read the same topology definition, so device indices, per-device metric slots, and positions align.
 
-The simulator emits this record in the engine's ingest format directly. There is no runtime middleware; the only translation is the boot-time, per-device `metric_label` → `metric_slot` binding (and the device id → `device_index` binding), performed identically by both sides. The ingest record is a compact little-endian struct: `u32 device_index, u16 metric_slot, f32 value` (10 bytes), optionally followed by a `u64 sample_timestamp` (Decision 7).
+The simulator emits this record in the engine's ingest format directly. There is no runtime middleware; the only translation is the boot-time, per-device `metric_label` → `metric_slot` binding (and the device id → `device_index` binding), performed identically by both sides. The ingest record is a compact little-endian struct: `device_index u32, metric_slot u16, value f32` (10 bytes), optionally followed by a `sample_timestamp u64` (Decision 7).
 
 The simulator supports:
 
@@ -666,7 +660,7 @@ scalar value ──► width convert ──► per-value ε filter ──► emi
 
 | Concern | Behaviour |
 | --- | --- |
-| Sending state | Each session remembers last-sent values in wire form (f16 for most slots, f32 for `sum`/`count`); each entry resolves against its source at encode time — a device entry reads the state table via the leaf's `state_offset`, a group entry reads the aggregate snapshot for the node's local channels (§4.3). |
+| Sending state | Each session remembers last-sent values in wire form (f16 for most slots, f32 for `sum`/`count`); each entry resolves against its source at encode time — a device entry reads the state table via the leaf's `row index` (§4.3.1), a group entry reads the aggregate snapshot for the node's local channels (§4.3). |
 | Value set | Every visible entry's complete value set is defined (a device instance's metrics, or a group entry's local channels); the client resolves the active display value locally (FR-CD-03), and transmission follows FR-TR-02. |
 | Attention | Each entry carries the node's attention value (a group entry's reserved attention channel, or a device instance's attention level); sent on change. |
 | Keyframes | Full visible keyframe on (re)connect; appeared entries sent in full on expansion or visibility change; on-demand resync on a sequence gap; no periodic keyframe (Decision 15). |
@@ -1006,7 +1000,7 @@ Metric identity is the per-device instance `(device, label)`; labels are chosen 
 - **State layout.** The state is normalized to one 64-bit slot per metric instance (`value` plus the frame-clock `arrival_ms`, Decision 16), plus a per-device row-offset array (CSR) that groups a device's instances and orders them in leaf order and local-slot order. Rows are exact, so there are no unused slots.
 - **Aggregation.** At boot each channel records the sorted state offsets of its contributing metric instances; the 60 Hz pass walks those offsets within the group's contiguous block of rows. K9 (≤ 5 µs over ≤ 1,000 contributors) is met by the bounded, prefetch-friendly gather rather than by a single sequential run.
 - **Encode.** A device's whole value set is contiguous, matching the per-entry "all values" requirement (FR-TR-02, §9.3).
-- **Ingest record.** The simulator emits the engine's ingest format directly — a compact little-endian struct `u32 device_index, u16 metric_slot, f32 value` (10 bytes), optionally followed by a `u64 sample_timestamp` — with no runtime middleware: both ends derive the bindings from the shared config at boot (§4.5).
+- **Ingest record.** The simulator emits the engine's ingest format directly — a compact little-endian struct `device_index u32, metric_slot u16, value f32` (10 bytes), optionally followed by a `sample_timestamp u64` — with no runtime middleware: both ends derive the bindings from the shared config at boot (§4.5).
 - **Client.** Cross-object comparison uses the attention channel (FR-CD-03); per-metric selection is per-object by construction, so no global vocabulary is needed.
 - **Alternatives rejected.** A site-wide metric vocabulary and a global kind slot; a global metric column; a separate `quantity` concept — the engine consumes **unit**, not the label; a label-keyed ingest record — strings on the 300k EPS path, when both ends bind device ids and labels to indices at boot (§4.5).
 
@@ -1015,7 +1009,7 @@ Metric identity is the per-device instance `(device, label)`; labels are chosen 
 Canonical child order is the order in which children are declared in the config, and the index carries a per-node child count for O(1) degree.
 
 - **Child order.** Children are an ordered sequence; the preorder DFS visits them in declaration order. This order defines node indices (wire identity, Decision 11), leaf order (CSR row order and the per-channel offset lists), the canonical float reduction order (Decision 14), and the frontier tie-break. In the config only sibling order is significant: a parent need not precede its children, and subtrees may interleave; parent-first belongs to the derived index (§4.3). It is server-side only: the client does not replay the build.
-- **Child enumeration.** Node shape: `subtree_size` (node count) and `child_count`. `first_child = index + 1` (parent-first preorder over emitted nodes; excluded groups never intervene) and `next_sibling = sibling + subtree_size` are derived, not stored. `deg(v)` is O(1), so the expansion-budget check `entries − 1 + deg(v) ≤ B` is O(1) even for a flat hierarchy with ~100k children; enumeration is O(deg) and only runs when `deg ≤ B`.
+- **Child enumeration.** Node shape: `subtree_size` (`u32`, node count) and `child_count` (`u32`). `first_child = index + 1` (parent-first preorder over emitted nodes; excluded groups never intervene) and `next_sibling = sibling + subtree_size` are derived, not stored. `deg(v)` is O(1), so the expansion-budget check `entries − 1 + deg(v) ≤ B` is O(1) even for a flat hierarchy with ~100k children; enumeration is O(deg) and only runs when `deg ≤ B`.
 - **Subtree-size units.** `subtree_size` is a node count.
 - **Invariant.** Boot checks that `child_count` equals the emitted direct children and that `first_child = index + 1`; the contiguity scan confirms `subtree_size`.
 - **Alternatives rejected.** Order derived from ids, map iteration, or filesystem order; a stored per-node device-count extent — aggregation reads per-channel offset lists (Decision 7), and visibility uses projected height and the entry budget.
@@ -1040,7 +1034,7 @@ The topology definition is three JSON documents — the group and device type li
 
 Variable-length per-node data is held in global structure-of-arrays addressed by ranges, and the aggregation plan is indexed by target channel and executed as a pull.
 
-- **Arrays.** Node arrays carry `(channel_base, channel_count)`. A global **channel-def array** holds one entry per channel (`unit`, `reduction`, `epsilon`, `limit_base`, `limit_count`, `contrib_base`, `contrib_count`); a group's channels are contiguous. A global **limit array** holds `{threshold, side, level}`. A global **contribution array** holds one tagged entry per source: `seed` (source = state offset) or `merge` (source = contributing channel-def index).
+- **Arrays.** Node-indexed arrays carry `(channel_base, channel_count)` (`[u32; 2]`) and the kind-dependent `row index` (`u32` — state-table row for a leaf, accumulator lane for a group). A global **channel-def array** holds one entry per channel (`unit`, `reduction`, `epsilon`, `limit_base`, `limit_count`, `contrib_base`, `contrib_count` (`u32` each)); a group's channels are contiguous. A global **limit array** holds `{threshold f32, side u8, level u8}`. A global **contribution array** holds one tagged entry per source: `seed` (source = `u32` state offset) or `merge` (source = `u32` contributing channel-def index).
 - **Pull.** The plan is the contribution array indexed by target channel: each channel lists its incoming sources. The reverse scan — bottom-up, single background thread, writing the write buffer — reduces each channel's list (seeds in device-leaf order, then merges in child order) and finalises it. This vectorises the reduction, gives an explicit canonical order for exact `sum`/`mean` (Decision 14), needs no pre-clear, and leaves the seed reduction parallelisable if the pass is ever split.
 - **Reserved attention.** One accumulator slot per group, outside the channel-def array; never a contribution target; computed from the group's channel limit levels, its direct devices' attention levels, and its children's attention channels.
 - **Alternatives rejected.** Push execution — the background-thread/bottom-up design removes push's only advantage (no cross-source races), leaving its serial read-modify-write chain; pull also avoids a pre-pass buffer clear and yields the canonical order.
@@ -1099,7 +1093,7 @@ The wire carries the absolute value in each slot's wire width — f16 for metric
 Ingest writes each `(device, metric)` slot atomically and readers load the newest value — no lock on either path and no queue on ingest.
 
 - **Back-pressure.** A saturated ingest overwrites stale values instead of buffering, which is what binds memory (FR-IS-05) and is the consequence K1 requires.
-- **Freshness storage.** Each slot is one 64-bit word `{f32 value, u32 arrival_ms}`, its value boot-initialised to a quiet NaN and written atomically — the value and its frame-clock stamp advance together, so a reader never pairs a new value with an old stamp. A frame derives availability as `value is finite ∧ frame_clock.wrapping_sub(arrival_ms) < freshness_ms`, against the clock captured once per frame: finiteness is the never-written test, because ingest rejects non-finite values (FR-IS-02), so no flag, timer, or second write has anything to keep in sync (FR-IS-03). A stamp never leads the clock in elapsed time; a next-frame evaluation over-states true age by at most the inter-frame gap, and a same-frame inclusion under-states it by at most the pass offset — both inside the 18 ms floor at the cadence of §3.2. The u32 wraps about every 49.7 days of uptime, and wrap-safe subtraction keeps the check exact while a slot's age is below one wrap period; a slot silent for a full period or more can alias as fresh for at most `freshness_ms` once per period, and the schema bounds `freshness_ms` at 24 h, well inside the horizon.
+- **Freshness storage.** Each slot is one 64-bit word `{value f32, arrival_ms u32}`, its value boot-initialised to a quiet NaN and written atomically — the value and its frame-clock stamp advance together, so a reader never pairs a new value with an old stamp. A frame derives availability as `value is finite ∧ frame_clock.wrapping_sub(arrival_ms) < freshness_ms`, against the clock captured once per frame: finiteness is the never-written test, because ingest rejects non-finite values (FR-IS-02), so no flag, timer, or second write has anything to keep in sync (FR-IS-03). A stamp never leads the clock in elapsed time; a next-frame evaluation over-states true age by at most the inter-frame gap, and a same-frame inclusion under-states it by at most the pass offset — both inside the 18 ms floor at the cadence of §3.2. The u32 wraps about every 49.7 days of uptime, and wrap-safe subtraction keeps the check exact while a slot's age is below one wrap period; a slot silent for a full period or more can alias as fresh for at most `freshness_ms` once per period, and the schema bounds `freshness_ms` at 24 h, well inside the horizon.
 - **Frame clock.** A register holding a monotonic-millisecond value, advanced exactly once per frame, at the frame path's opening (§3.2); until that first advance, ingest stamps from the live clock, so readings accepted before the first frame carry their true time. Ingest stamps each accepted reading from the register thereafter; aggregation, visibility, and encode capture it once into a local per frame and use that value throughout, so availability is constant within a frame. The guarantee holds while each step evaluates within `freshness_ms` of the register's advance, which the §3.2 cadence and the 18 ms floor ensure; step 3 publishes one availability bit per retained group with its snapshot, which visibility reads instead of values.
 - **Alternatives rejected.** A mutex or sharded-lock table would plausibly meet K1 (300,000 atomic stores/s is well within reach of coarser schemes), so lock-freedom is a preference rather than a necessity; an MPSC queue with bounded backlog — queued readings would age out of the freshness window (FR-IS-03) under load; a separate availability flag — clearing it needs the frame-clock stamp anyway, so it is a second write kept in sync with the first; latest-by-sample-timestamp selection — it makes the source clock load-bearing for correctness and turns ingest into a conditional read-modify-write, while the single ordered stream makes reordering unreachable (FR-IS-01); per-viewer or per-request state tables — duplicated state.
 
