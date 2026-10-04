@@ -387,7 +387,7 @@ The engine separates its memory by access pattern into three regions: the **inde
 
 #### 4.3.1 Index
 
-- **Node-indexed arrays.** Each node field has an array indexed by the node index: node `i`'s record is element `i` of every array, laid out in structure-of-arrays form to keep traversal cache-friendly. The array position is the node's index and identity (Decision 11), so it is not stored redundantly. Nodes reference state by offset and range, never by value.
+**Node-indexed arrays.** Each node field has an array indexed by the node index: node `i`'s record is element `i` of every array, laid out in structure-of-arrays form to keep traversal cache-friendly. The array position is the node's index and identity (Decision 11), so it is not stored redundantly. Nodes reference state by offset and range, never by value.
 
 | Array | Element | Type | Purpose | Note |
 | --- | --- | --- | --- | --- |
@@ -399,44 +399,47 @@ The engine separates its memory by access pattern into three regions: the **inde
 | channel definitions | `(channel_base, channel_count)` | `[u32; 2]` | Aggregation, Encoder | A slice `channel_def[channel_base .. +channel_count]` of the global channel-def array; ≤16 per group, fixed at boot. |
 | row index | start of the node's row: state table (leaf) or accumulator lanes (group) | `u32` | Aggregation, Encoder | For a group the row length is its channel count; for a leaf the same offset addresses `values` and metric-def. |
 
-- **Non-node-indexed arrays.** These five boot-written global arrays are not indexed by node index: each is reached from a node-indexed array or through a range inside another entry. Global attribute data lives in boot-written arrays alongside the node-indexed arrays; variable-length per-node data lives in global arrays addressed by ranges rather than inlined:
+**Non-node-indexed arrays.** These five boot-written global arrays are not indexed by node index: each is reached from a node-indexed array or through a range inside another entry. Global attribute data lives in boot-written arrays alongside the node-indexed arrays; variable-length per-node data lives in global arrays addressed by ranges rather than inlined:
 
-| Array | Element | Type | Reached from | Note |
-| --- | --- | --- | --- | --- |
-| metric-def | `epsilon` (f32), `freshness_ms` (u32), `absence` (u8), and the metric's `(limit_base, limit_count)` (`u32` each) into the limit array | struct (~20 B) | the `row index` of a leaf — one slot index addresses both `values` and metric-def | one entry per metric slot, in the same device-major slot order as the `values` array; its fields are the operands of the encode ε filter, the freshness check, and the attention pass (§6, §7.1, §9.2) |
-| channel-def | `unit`, `reduction`, `epsilon`, `limit_base`, `limit_count`, `seed_base`, `seed_count`, `merge_base`, `merge_count` (`u32` each) | struct | the node's channel definitions field — the `(channel_base, channel_count)` pair | one entry per configured channel; a group's channels are contiguous within its slice |
-| limit | `{threshold f32, side u8, level u8}` | struct | `(limit_base, limit_count)` ranges inside a metric-def or channel-def entry | one per limit |
-| seed array | the state offset of each feeding metric | `u32` | `(seed_base, seed_count)` slices inside a channel-def entry | one entry per feeding metric, in device-leaf order; indexed by target channel (pull, Decision 10) |
-| merge array | the accumulator lane of each contributing child channel | `u32` | `(merge_base, merge_count)` slices inside a channel-def entry | one entry per contributing channel, in child order; seed lists then merge lists form the canonical reduction order (Decision 14) |
+| Array | Element | Type | Purpose | Reached from | Note |
+| --- | --- | --- | --- | --- | --- |
+| metric-def | `epsilon` (f32), `freshness_ms` (u32), `absence` (u8), and the metric's `(limit_base, limit_count)` (`u32` each) into the limit array | struct (~20 B) | Encoder, Availability, Attention (§6, §7.1, §9.2) | the `row index` of a leaf — one slot index addresses both `values` and metric-def | one entry per metric slot, in the same device-major slot order as the `values` array |
+| channel-def | `unit`, `reduction`, `epsilon`, `limit_base`, `limit_count`, `seed_base`, `seed_count`, `merge_base`, `merge_count` (`u32` each) | struct | Aggregation, Encoder, Attention | the node's channel definitions field — the `(channel_base, channel_count)` pair | one entry per configured channel; a group's channels are contiguous within its slice |
+| limit | `{threshold f32, side u8, level u8}` | struct | Attention | `(limit_base, limit_count)` ranges inside a metric-def or channel-def entry | one per limit |
+| seed array | the state offset of each feeding metric | `u32` | Aggregation | `(seed_base, seed_count)` slices inside a channel-def entry | one entry per feeding metric, in device-leaf order; indexed by target channel (pull, Decision 10) |
+| merge array | the accumulator lane of each contributing child channel | `u32` | Aggregation | `(merge_base, merge_count)` slices inside a channel-def entry | one entry per contributing channel, in child order; seed lists then merge lists form the canonical reduction order (Decision 14) |
 
 #### 4.3.2 State table
 
 **Arrays and types.** The state table holds two arrays:
 
-| Array | Element type | Elements |
-| --- | --- | --- |
-| `values` | 64-bit slot `{value f32, arrival_ms u32}` — one atomic word per reading | one per `(device, metric)` slot — `Σ metrics/device`, ~300,000 at the full tier |
-| `row_offsets` | `u32` | `N+1` device-row boundaries |
+| Array | Element | Type | Note |
+| --- | --- | --- | --- |
+| `values` | `{value f32, arrival_ms u32}` | `u64` | one per `(device, metric)` slot — `Σ metrics/device`, ~300,000 at the full tier |
+| `row_offsets` | `device-row boundary` | `u32` | `N+1` device-row boundaries |
 
-- The **state table** is separate from the index and laid out **device-major in CSR form**: a `values` array of **64-bit slots** plus a per-device `row_offsets` array.
-  - **Slot.** Each slot is `{value f32, arrival_ms u32}` — one atomic word per reading. The `value` boot-initialises to a quiet NaN and carries source precision (§4.5); f16 quantisation happens only in transport (§9.2). The `arrival_ms` is a **frame-clock arrival stamp**, recorded while the frame clock advances once per frame's opening (§3.2), used only for freshness.
-  - **Ordering.** Devices follow index leaf order, and each device's declared metrics are contiguous within its row in local-slot (declaration) order. Labels are device-local (§4.1), so a slot is meaningful only within its device and there is no global metric column.
-  - **Addressing.** A device's row is `values[row_offsets[d] .. row_offsets[d+1]]`; a group's devices occupy a contiguous range of rows, so their values occupy one contiguous block. A device's whole value set is contiguous, which suits the per-entry encode path (§9.3). The row and CSR layout are fixed by Decision 7; the 64-bit slot by Decision 16.
-  - **Aggregation gather.** At boot the compiler records each channel's seed list — the sorted absolute offsets of its contributing metric instances — so the aggregation pass walks a bounded, prefetch-friendly gather inside that block (FR-AG-02, K9); a metric feeding several channels appears in several such lists.
-- **Sizes.** Rows are exact: a device's compact row holds only the metrics it declares, so there are no unused slots and the table is `Σ metrics/device` 8-byte slots plus `N+1` `u32` row offsets (~400 KB of offsets at 100k). At ~3 metrics/device the full-tier table is ~300,000 slots (~2.4 MB: the f32 value plus the u32 frame-clock stamp). The parallel metric-def array holds one ~20-byte entry per slot (~6.0 MB at 300,000 metrics), boot-written and immutable.
+The **state table** is separate from the index and laid out **device-major in compressed-sparse-row (CSR) form**: a `values` array of **64-bit slots** plus a per-device `row_offsets` array.
+
+- **Slot.** Each slot is `{value f32, arrival_ms u32}` — one atomic word per reading. The `value` boot-initialises to a quiet NaN and carries source precision (§4.5); f16 quantisation happens only in transport (§9.2). The `arrival_ms` is a **frame-clock arrival stamp**, recorded while the frame clock advances once per frame's opening (§3.2), used only for freshness.
+- **Ordering.** Devices follow index leaf order, and each device's declared metrics are contiguous within its row in local-slot (declaration) order. Labels are device-local (§4.1), so a slot is meaningful only within its device and there is no global metric column.
+- **Addressing.** A device's row is `values[row_offsets[d] .. row_offsets[d+1]]`; a group's devices occupy a contiguous range of rows, so their values occupy one contiguous block. A device's whole value set is contiguous, which suits the per-entry encode path (§9.3). The row and CSR layout are fixed by Decision 7; the 64-bit slot by Decision 16.
+- **Aggregation gather.** At boot the compiler records each channel's seed list — the sorted absolute offsets of its contributing metric instances — so the aggregation pass walks a bounded, prefetch-friendly gather inside that block (FR-AG-02, K9); a metric feeding several channels appears in several such lists.
+
+**Sizes.** Rows are exact: a device's compact row holds only the metrics it declares, so there are no unused slots and the table is `Σ metrics/device` 8-byte slots plus `N+1` `u32` row offsets (~400 KB of offsets at 100k). At ~3 metrics/device the full-tier table is ~300,000 slots (~2.4 MB: the f32 value plus the u32 frame-clock stamp). The parallel metric-def array holds one ~20-byte entry per slot (~6.0 MB at 300,000 metrics), boot-written and immutable.
 
 #### 4.3.3 Aggregate buffers
 
 **Arrays and types.** The aggregate buffers hold three arrays:
 
-| Array | Element type | Elements |
-| --- | --- | --- |
-| channel accumulators (two buffers) | the accumulator for the channel's reduction (`sum`, `mean`, `min`, `max`, `count`) | one per retained group × local channel (≤16), per buffer |
-| attention slots (two buffers) | `u8` on the fixed severity scale (normal, advisory, warning, critical) | one per index node — the group's reserved channel or the device's level — per buffer |
-| availability bits | 1 bit | one per retained group |
+| Array | Element | Type | Note |
+| --- | --- | --- | --- |
+| channel accumulators (two buffers) | the accumulator for the channel's reduction (`sum`, `mean`, `min`, `max`, `count`) | `f32` | one per retained group × local channel (≤16), per buffer |
+| attention slots (two buffers) | level on the fixed severity scale (normal, advisory, warning, critical) | `u8` | one per index node — the group's reserved channel or the device's level — per buffer |
+| availability bits | availability | `1 bit` | one per retained group |
 
-- **Channel accumulators** are stored per group for its local channels and double-buffered: the frame reads one buffer while the sweep writes the other, then swaps (§7, Decision 5).
-- **Addressing.** The region is node-indexed: a group's `row index` (§4.3.1) is its lane start in the accumulator buffer with length `channel_count`; attention holds one slot per index node; one availability bit per retained group sits at the group's node index. Both sides share one boot-fixed layout, so one set of offsets resolves either side.
+**Channel accumulators** are stored per group for its local channels and double-buffered: the frame reads one buffer while the sweep writes the other, then swaps (§7, Decision 5).
+
+**Addressing.** The region is node-indexed: a group's `row index` (§4.3.1) is its lane start in the accumulator buffer with length `channel_count`; attention holds one slot per index node; one availability bit per retained group sits at the group's node index. Both sides share one boot-fixed layout, so one set of offsets resolves either side.
 
 ### 4.4 Engine Configuration
 
