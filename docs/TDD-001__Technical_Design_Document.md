@@ -4,9 +4,9 @@
 | --- | --- |
 | Document ID | TDD-001 |
 | Title | Server-Side Hierarchical Spatial Filtering Engine — Technical Design |
-| Version | 0.14.0 |
+| Version | 0.15.0 |
 | Status | Draft |
-| Last Updated | 2026-10-07 |
+| Last Updated | 2026-10-08 |
 | Owner | Project maintainer |
 | Related documents | Upstream: PRD-001 (Product Requirements). Downstream: PLN-001 (Master Execution Sequence). |
 
@@ -102,7 +102,7 @@ Three paths make up the pipeline: the **boot path**, which runs once before serv
 3. **Aggregation** reads the state table (metric values) and the index (the boot-compiled contribution plan, Decision 10) — and nothing per-viewer — then writes each group's channels and attention into the write buffer and swaps buffers to publish the frame's snapshot (§8).
 4. **Camera context** — each client sends its camera pose and screen geometry every frame, and its selected node index on selection change; the transport passes both to the visibility engine (§10.5).
 5. **Visibility** reads the index (geometry boxes, LOD boxes, subtree sizes, child counts), the camera context from step 4, and the per-group availability bit published with step 3's snapshot — and no values — then produces that viewer's bounded entry cut of at most `B` entries (§9.2).
-6. **Encode** — per viewer, reads three inputs: the entry cut from step 5 (which entries exist), the aggregate snapshot from step 3 (a group entry's channel values), and the state table directly (a device entry's metric values via the leaf's `row index`, §5.2). It converts each value to its slot's wire width — f16, or f32 for `sum`/`count` — applies the per-value ε filter (metric ε from the metric-def array, channel ε from the channel-def array, §5), tests device-slot availability against the frame clock while a group entry's no-value channels come from the step-3 snapshot, suppresses unchanged slots against the last-sent baseline, and sends the selected object at full fidelity (§10.2, §10.3).
+6. **Encode** — per viewer, reads three inputs: the entry cut from step 5 (which entries exist), the aggregate snapshot from step 3 (a group entry's channel values), and the state table directly (a device entry's metric values via the leaf's `row base`, §5.2). It converts each value to its slot's wire width — f16, or f32 for `sum`/`count` — applies the per-value ε filter (metric ε from the metric-def array, channel ε from the channel-def array, §5), tests device-slot availability against the frame clock while a group entry's no-value channels come from the step-3 snapshot, suppresses unchanged slots against the last-sent baseline, and sends the selected object at full fidelity (§10.2, §10.3).
 7. **Transport** writes one WebSocket binary frame for that viewer (§10.4); the session baseline advances only on an actual socket write (§10.2, §10.3).
 8. **Render** — the client writes instance transforms and colours into the pre-allocated VBO and draws the `InstancedMesh` (§11.1).
 
@@ -372,10 +372,10 @@ The engine separates its memory by access pattern into four regions: the **index
 
 | Region | Contents | Written | Read |
 | --- | --- | --- | --- |
-| Index | **Node fields:** kind, geometry box, LOD box, child access + subtree size, channel-def slice `(channel_base, channel_count)`, contribution sources (per channel), row index. **Global arrays:** metric-def, channel-def, limit, seed, merge | Once at boot | Every frame: per viewer (visibility, encode); once per frame, shared (aggregation) |
-| State table | Latest value and frame-clock arrival stamp per `(device, metric)`, plus the per-device `row_offsets` array; availability derived per pass | Continuously, at ingest | Once per frame, per group (aggregation); per viewer, per device entry (encode) |
+| Index | **Node fields:** kind, geometry box, LOD box, child access + subtree size, channel slice `(channel_base, channel_count)`, contribution sources (per channel), row base. **Global arrays:** metric-def, channel-def, limit, seed, merge | Once at boot | Every frame: per viewer (visibility, encode); once per frame, shared (aggregation) |
+| State table | Latest value and frame-clock arrival stamp per `(device, metric)`, plus the per-device row pointers array; availability derived per pass | Continuously, at ingest | Once per frame, per group (aggregation); per viewer, per device entry (encode) |
 | Aggregate buffers | Per-group per-channel accumulators for groups retained in the index; the reserved attention channel and per-device attention level (`u8` slots); one availability bit per retained group | Once per frame | Per viewer, per frame |
-| Session tables | Per-viewer frame epochs, last-sent baselines (f16 and f32), and previous-frame node list | Per frame; baseline on socket write | Per viewer, per frame (diff and encode) |
+| Session tables | Per-viewer frame epochs, device and group last-sent baselines, the attention baseline, and previous-frame node list | On socket write | Per viewer, per frame (diff and encode) |
 
 ### 5.1 Reading Model
 
@@ -395,15 +395,15 @@ The engine separates its memory by access pattern into four regions: the **index
 | LOD box | AABB min/max | `[f32; 6]` | Visibility | Projected on-screen height, expansion order, and the entry-budget ranking; always the union of the node's devices' positions (Decision 22). |
 | subtree size | node count | `u32` | Visibility | Subtree bounds and skip-offset pruning; `skip_index = index + subtree_size` is derived, not stored. Node count only — no device-count extent is needed (aggregation uses per-channel offset lists, Decision 7). |
 | child access | `child_count` | `u32` | Visibility | `child_count` gives `deg(v)` in O(1) for the expansion-budget check; `first_child = index + 1` and `next_sibling = sibling + subtree_size` are derived, not stored (Decision 8). |
-| channel definitions | `(channel_base, channel_count)` | `[u32; 2]` | Aggregation, Encoder | A slice `channel_def[channel_base .. +channel_count]` of the global channel-def array; ≤16 per group, fixed at boot. |
-| row index | start of the node's row: state table (leaf) or accumulator lanes (group) | `u32` | Aggregation, Encoder | For a group the row length is its channel count; for a leaf the same offset addresses `values` and metric-def. |
+| channel slice | `(channel_base, channel_count)` | `[u32; 2]` | Aggregation, Encoder | A slice `[channel_base, channel_base + channel_count)` of the global channel-def array; ≤16 per group, fixed at boot. |
+| row base | start of the node's row: state table (leaf) or accumulator lanes (group) | `u32` | Aggregation, Encoder | For a group the row length is its channel count; for a leaf the same offset addresses the state slots and metric-def. |
 
 **Non-node-indexed arrays.** These five boot-written global arrays are not indexed by node index: each is reached from a node-indexed array or through a range inside another entry. Global attribute data lives in boot-written arrays alongside the node-indexed arrays; variable-length per-node data lives in global arrays addressed by ranges rather than inlined:
 
 | Array | Element | Type | Purpose | Reached from | Note |
 | --- | --- | --- | --- | --- | --- |
-| metric-def | `epsilon` (f32), `freshness_ms` (u32), `absence` (u8), and the metric's `(limit_base, limit_count)` (`u32` each) into the limit array | struct (~20 B) | Encoder, Availability, Attention (§7, §8.1, §10.2) | the `row index` of a leaf — one slot index addresses both `values` and metric-def | one entry per metric slot, in the same device-major slot order as the `values` array |
-| channel-def | `unit`, `reduction`, `epsilon`, `limit_base`, `limit_count`, `seed_base`, `seed_count`, `merge_base`, `merge_count` (`u32` each) | struct | Aggregation, Encoder, Attention | the node's channel definitions field — the `(channel_base, channel_count)` pair | one entry per configured channel; a group's channels are contiguous within its slice |
+| metric-def | `epsilon` (f32), `freshness_ms` (u32), `absence` (u8), and the metric's `(limit_base, limit_count)` (`u32` each) into the limit array | struct (~20 B) | Encoder, Availability, Attention (§7, §8.1, §10.2) | the `row base` of a leaf — one slot index addresses both the state slots and metric-def | one entry per metric slot, in the same device-major slot order as the state slots array |
+| channel-def | `unit`, `reduction`, `epsilon`, `limit_base`, `limit_count`, `seed_base`, `seed_count`, `merge_base`, `merge_count` (`u32` each) | struct | Aggregation, Encoder, Attention | the node's `channel slice` field — the `(channel_base, channel_count)` pair | one entry per configured channel; a group's channels are contiguous within its slice |
 | limit | `{threshold f32, side u8, level u8}` | struct | Attention | `(limit_base, limit_count)` ranges inside a metric-def or channel-def entry | one per limit |
 | seed array | the state offset of each feeding metric | `u32` | Aggregation | `(seed_base, seed_count)` slices inside a channel-def entry | one entry per feeding metric, in device-leaf order; indexed by target channel (pull, Decision 10) |
 | merge array | the accumulator lane of each contributing child channel | `u32` | Aggregation | `(merge_base, merge_count)` slices inside a channel-def entry | one entry per contributing channel, in child order; seed lists then merge lists form the canonical reduction order (Decision 14) |
@@ -416,17 +416,17 @@ The engine separates its memory by access pattern into four regions: the **index
 
 | Array | Element | Type | Note |
 | --- | --- | --- | --- |
-| `values` | `{value f32, arrival_ms u32}` | `u64` | one per `(device, metric)` slot — `Σ metrics/device`, ~300,000 at the full tier |
-| `row_offsets` | `device-row boundary` | `u32` | `N+1` device-row boundaries |
+| state slots | `{value f32, arrival_ms u32}` | `u64` | one per `(device, metric)` slot — `Σ metrics/device`, ~300,000 at the full tier |
+| row pointers | device-row boundary | `u32` | `N+1` device-row boundaries |
 
-The **state table** is separate from the index and laid out **device-major in compressed-sparse-row (CSR) form**: a `values` array of **64-bit slots** plus a per-device `row_offsets` array.
+The **state table** is separate from the index and laid out **device-major in compressed-sparse-row (CSR) form**: a state slots array holding **64-bit slots**, plus per-device row pointers.
 
 - **Slot.** Each slot is `{value f32, arrival_ms u32}` — one atomic word per reading. The `value` boot-initialises to a quiet NaN and carries source precision (§7.1); f16 quantisation happens only in transport (§10.2). The `arrival_ms` is a **frame-clock arrival stamp**, recorded while the frame clock advances once per frame's opening (§3.2), used only for freshness.
 - **Ordering.** Devices follow index leaf order, and each device's declared metrics are contiguous within its row in local-slot (declaration) order. Labels are device-local (§4), so a slot is meaningful only within its device and there is no global metric column.
-- **Addressing.** A device's row is `values[row_offsets[d] .. row_offsets[d+1]]`; a group's devices occupy a contiguous range of rows, so their values occupy one contiguous block. A device's whole value set is contiguous, which suits the per-entry encode path (§10.3). The row and CSR layout are fixed by Decision 7; the 64-bit slot by Decision 16.
+- **Addressing.** A device's row is `state_slots[row_pointers[d] .. row_pointers[d+1]]`; a group's devices occupy a contiguous range of rows, so their values occupy one contiguous block. A device's whole value set is contiguous, which suits the per-entry encode path (§10.3). The row and CSR layout are fixed by Decision 7; the 64-bit slot by Decision 16.
 - **Aggregation gather.** At boot the compiler records each channel's seed list — the sorted absolute offsets of its contributing metric instances — so the aggregation pass walks a bounded, prefetch-friendly gather inside that block (FR-AG-02, K9); a metric feeding several channels appears in several such lists.
 
-**Sizes.** Rows are exact: a device's compact row holds only the metrics it declares, so there are no unused slots and the table is `Σ metrics/device` 8-byte slots plus `N+1` `u32` row offsets (~400 KB of offsets at 100k). At ~3 metrics/device the full-tier table is ~300,000 slots (~2.4 MB: the f32 value plus the u32 frame-clock stamp). The parallel metric-def array holds one ~20-byte entry per slot (~6.0 MB at 300,000 metrics), boot-written and immutable.
+**Sizes.** Rows are exact: a device's compact row holds only the metrics it declares, so there are no unused slots and the table is `Σ metrics/device` 8-byte slots plus `N+1` `u32` row pointers (~400 KB of pointers at 100k). At ~3 metrics/device the full-tier table is ~300,000 slots (~2.4 MB: the f32 value plus the u32 frame-clock stamp). The parallel metric-def array holds one ~20-byte entry per slot (~6.0 MB at 300,000 metrics), boot-written and immutable.
 
 ### 5.4 Aggregate buffers
 
@@ -434,28 +434,33 @@ The **state table** is separate from the index and laid out **device-major in co
 
 | Array | Element | Type | Note |
 | --- | --- | --- | --- |
-| channel accumulators (two buffers) | the accumulator for the channel's reduction (`sum`, `mean`, `min`, `max`, `count`) | `f32` | one lane per retained group × local channel (≤16); one f32 per lane, two for `mean` (`sum`, `count`); per buffer |
-| attention slots (two buffers) | level on the fixed severity scale (normal, advisory, warning, critical) | `u8` | one per index node — the group's reserved channel or the device's level — per buffer |
+| channel accumulators | the accumulator for the channel's reduction (`sum`, `mean`, `min`, `max`, `count`) | `[f32; 2]` | two buffers, each with one lane per retained group × local channel (≤16); lanes are fixed two-f32 slots — the second word used only for `mean` (`sum`, `count`); a lane's byte offset is 8 × its lane index |
+| attention slots | level on the fixed severity scale (`normal`, `advisory`, `warning`, `critical`) | `u8` | two buffers, each with one per index node — the group's reserved channel or the device's level |
 | availability bits | availability | `1 bit` | one per retained group; carried by the §8 snapshot publish |
 
 **Channel accumulators** are stored per group for its local channels and double-buffered: the frame reads one buffer while the sweep writes the other, then swaps (§8, Decision 5).
 
-**Addressing.** The region is node-indexed: a group's `row index` (§5.2) is its lane start in the accumulator buffer with length `channel_count`; attention holds one slot per index node; one availability bit per retained group sits at the group's node index. Both sides share one boot-fixed layout, so one set of offsets resolves either side.
+**Addressing.** The region is node-indexed: a group's `row base` (§5.2) is its lane start in the accumulator buffer with length `channel_count`; attention holds one slot per index node; one availability bit per retained group sits at the group's node index. Both sides share one boot-fixed layout, so one set of offsets resolves either side.
 
 **Sizes.** A group's row spans `channel_count` lanes (≤16) — at most 128 B per group — so the full tier's 1,781 retained groups hold at most 456 KB across both buffers. Attention takes one `u8` per index node (101,781 nodes at the full tier, ~100 KB per buffer) and availability one bit per retained group (~223 B), keeping the whole region under ~0.7 MB with both buffers included.
 
 ### 5.5 Session tables
 
-**Arrays and types.** Each viewer's session holds four arrays:
+**Arrays and types.** Each viewer's session holds five arrays:
 
 | Array | Element | Type | Note |
 | --- | --- | --- | --- |
 | epochs | the session's frame number, 0 until first stamped | `u32` | indexed by node; presence and change eligibility without per-frame clearing — only visible nodes are written |
-| last-sent baseline | the f16 wire-domain value | `u16` | indexed by value slot — device metrics and group channels both; the ε-suppression reference (§10.3) |
-| sum/count baseline | the f32 wire-domain value | `f32` | parallel to the f16 baseline for group `sum`/`count` slots |
-| previous-frame node list | a previously visible node index | `u32` | the last frame's visible set, keyed by node index (§10.3) |
+| device baseline | the f16 wire-domain value | `u16` | indexed by state-table slot — the leaf's `row base` plus its local slot, device metrics only; the ε-suppression reference (§10.3) |
+| group baseline | the last-sent wire value, widened into f32 | `f32` | indexed by the group's accumulator lane (`row base` + local channel); `sum`/`count` cells hold the f32 wire value, the f16 channels their quantised value widened without loss |
+| attention baseline | the last-sent attention level | `u8` | indexed by node; the reference for the sent-on-change rule (§10.3) |
+| previous-frame node list | a previously visible node index | `u32` | the last written frame's visible set, keyed by node index (§10.3) |
 
-**Sizes.** The four arrays take ~1 MB per viewer at 100k (~300k device-metric slots at 2 B, plus 100k epochs at 4 B, plus ~28k group-channel slots at 2 B — ~57 KB); a group entry's `sum`/`count` slots add 2 B each in the f32 baseline.
+**Value slots.** The device and group baselines each use their region's own index space, whose local order matches the wire's per-entry slots (§10.4): a device metric sits at its state-table slot (the leaf's `row base` plus its local slot), and a group channel at its accumulator lane (the group's `row base` plus its local channel). The layout is fixed at boot, so every session allocates arrays of the same shape.
+
+**The current epoch.** The stamps come from one `u32` **frame number** held in the session's state beside these arrays: it starts at 0, each diff reads the stamps to classify entries, and each write commit advances the number by one and stamps the visible nodes' cells with it — so `0` remains the mark of a never-visible node (§10.3). The number wraps once every ~828 days of continuous writes at 60 Hz; for one write the visible stamps and the never-visible mark are both `0`, until the next write re-stamps the visible cells, and any stamp other than the current number marks a gap and takes the appeared path — so a wrap costs one frame of resend, and removal scans the previous-frame list, not the stamps (§10.3).
+
+**Sizes.** The five arrays take ~1.2 MB per viewer at 100k: the device baseline covers ~300k device-metric slots at 2 B (~600 KB), the group baseline covers the ~28k group-channel slots at 4 B (~114 KB), the epochs are 100k at 4 B (~400 KB), the attention baseline is 100k at 1 B (~100 KB), and the previous-frame list adds ≤ B entries at 4 B.
 
 ## 6. Hierarchical Spatial Index
 
@@ -468,7 +473,7 @@ A straightforward index of device positions cannot answer *both* "what is on scr
 The topology (nodes and parent-child edges) is fixed by the config; the build **derives** the flat index from it and never invents, reparents, rebalances, or spatially reorders the tree (Decision 1). A pre-pass resolves `type` references against the loaded libraries, buckets each node under its parent in list order, and validates the tree (single root, acyclic, devices reachable); one DFS in that canonical order then produces the layout and all derived per-node fields:
 
 1. **Preorder (on entry):** assign `id = position`, emit the node into the flat array, record its kind (leaf device / internal group) and its channel definitions, and record a leaf's state offset. Recurse into children in canonical (list) order (Decision 8).
-2. **Postorder (on exit):** set a group's **LOD box** to the union of its children's LOD boxes (a leaf's box is its device position) and its **geometry box** to the declared `aabb` when present, else to the union of its children's geometry boxes — device-less children included — and its devices' positions (Decision 22); set `subtree_size = nodes emitted in this subtree` (node count) and `child_count` = emitted direct children. This also yields the parent-first flattening and the contiguous-subtree invariant directly. Retained groups then receive their accumulator lane range in this bottom-up order (a group's `row index` is its lane start, length `channel_count`).
+2. **Postorder (on exit):** set a group's **LOD box** to the union of its children's LOD boxes (a leaf's box is its device position) and its **geometry box** to the declared `aabb` when present, else to the union of its children's geometry boxes — device-less children included — and its devices' positions (Decision 22); set `subtree_size = nodes emitted in this subtree` (node count) and `child_count` = emitted direct children. This also yields the parent-first flattening and the contiguous-subtree invariant directly. Retained groups then receive their accumulator lane range in this bottom-up order (a group's `row base` is its lane start, length `channel_count`).
 3. Record the **leaf order** (devices in DFS visit order) — the order used to lay out the state table's device dimension (§5) — and each group's **contribution sources** (per local channel, the metric instances and child channels that feed it, validated for same unit and same reduction), including each channel's seed list (the sorted contributing state offsets) and merge list (the contributing channels' accumulator lanes) for the aggregation pass (§5, §8).
 4. Bind each device's metric labels to per-device slots (`metric_label → metric_slot`) and validate the invariants below.
 5. Run a **cheap post-build invariant scan** (contiguity, parent-first, skip-offsets, contribution integrity).
@@ -587,7 +592,7 @@ The simulator's operating parameters live in a **simulator profile** — the sim
 
 ### 8.1 Attention channel (severity and absence)
 
-Each group carries a **reserved unitless attention channel** (the group's attention value, reduction `max`), computed in the same bottom-up pass as its configured channels and streamed with the node's entry (FR-TD-11, FR-AG-06). Its value is on the fixed severity scale of normal, advisory, warning, and critical. A device's attention level is the greatest of its metrics' contributions. The scale is the fixed named scale of Decision 9 (FR-TD-11).
+Each group carries a **reserved unitless attention channel** (the group's attention value, reduction `max`), computed in the same bottom-up pass as its configured channels and streamed with the node's entry (FR-TD-11, FR-AG-06). Its value is on the fixed severity scale of `normal`, `advisory`, `warning`, and `critical`. A device's attention level is the greatest of its metrics' contributions. The scale is the fixed named scale of Decision 9 (FR-TD-11).
 
 - **Severity limits.** A metric or channel may declare a list of limits, each `(threshold, side, level)` on the high and/or low side. A value maps to a level by `level = max over limits of ( fired ? level : 0 )`, where `fired` is `value >= threshold` (high) or `value <= threshold` (low). Limits inherit the value's unit and are validated at boot (finite threshold; `side` `high`/`low`; level on the fixed severity scale).
 - **Contributions.** A metric contributes its limit level when available, or its absence level when unavailable (per-metric; availability from FR-IS-03, §7). A configured channel contributes its limit level when it has a value.
@@ -680,17 +685,17 @@ scalar value ──► width convert ──► per-value ε filter ──► emi
 
 | Concern | Behaviour |
 | --- | --- |
-| Sending state | Each session remembers last-sent values in wire form (f16 for most slots, f32 for `sum`/`count`); each entry resolves against its source at encode time — a device entry reads the state table via the leaf's `row index` (§5.2), a group entry reads the aggregate snapshot for the node's local channels (§5). |
+| Sending state | Each session remembers last-sent values in wire form (f16 for most slots, f32 for `sum`/`count`); each entry resolves against its source at encode time — a device entry reads the state table via the leaf's `row base` (§5.2), a group entry reads the aggregate snapshot for the node's local channels (§5). |
 | Value set | Every visible entry's complete value set is defined (a device instance's metrics, or a group entry's local channels); the client resolves the active display value locally (FR-CD-03), and transmission follows FR-TR-02. |
 | Attention | Each entry carries the node's attention value (a group entry's reserved attention channel, or a device instance's attention level); sent on change. |
 | Keyframes | Full visible keyframe on (re)connect; appeared entries sent in full on expansion or visibility change; on-demand resync on a sequence gap; no periodic keyframe (Decision 15). |
 | Unavailable values | Explicit NaN marker on the wire for a device metric stale under the frame-clock test or a channel with no available contribution in the step-3 snapshot, sent regardless of the ε filter. |
-| Sequence | Frames carry a monotonic sequence; clients discard duplicates and request a keyframe on a detected gap. |
+| Sequence | Frames carry a monotonic sequence assigned when the frame is written, so a latest-wins drop never causes a sequence gap; clients discard duplicates and request a keyframe on a detected gap. |
 | Wire identity | Per-frame entries are keyed by the server node index (u32). On (re)connect the server sends the **dictionary** — every node in the index, in chunks (§10.5) — mapping each node index to `(kind, config id)`; the client resolves position, units, metric labels, and channel meanings from the shared config (FR-TD-09). Indices are per-build and not stable across restarts; a reconnect gets a fresh dictionary (Decision 11). |
 | Slow clients | Stale frames are dropped (latest-wins on egress) and do not advance the baseline; per-session state is bounded (Decision 15). |
 | Inspection target | A selected device or group is streamed every frame at full fidelity until deselected; the ε filter does not suppress it. |
 
-**Session reconciliation.** The last-sent baseline is valid only on the intersection of the current visible set and the previous frame's set, so each frame reconciles the two:
+**Session reconciliation.** The last-sent baseline is valid only on the intersection of the current visible set and the last written frame's set, so each frame reconciles the two:
 
 | Case | Session state | Wire |
 | --- | --- | --- |
@@ -700,7 +705,7 @@ scalar value ──► width convert ──► per-value ε filter ──► emi
 
 Keying is by node index, which is sufficient because the index is immutable and a node's kind never changes; a device↔blend transition is different indices (the group node leaves the set, its device leaves enter), each handled as appeared/removed. Reappearance after any gap is treated as **appeared** — the client may have dropped the instance, so a stale baseline would be invalid. Pruning on removal keeps per-session state bounded by the current visible set plus the selected object (FR-TR-04).
 
-Implementation is a dense-integer diff — O(visible value slots) per viewer per frame, allocation-free, no hashing. Each frame reads every visible node's epoch and then stamps it with the current frame number: an epoch equal to the previous frame's number marks a continuous entry, while an older epoch marks a gap and takes the appeared path. Removals are found by scanning the previous frame's node list (≤ B), never all N nodes: a listed node whose epoch was not stamped with the current frame number was not visible and is pruned. Baseline advancement on the transport occurs only when a frame is actually written, so latest-wins drop and change suppression compose. The per-session tables themselves — types, indexing, and sizes — are specified in §5.5.
+Implementation is a dense-integer diff — O(visible value slots) per viewer per frame, allocation-free, no hashing. Each frame reads every visible node's epoch: an epoch equal to the last written frame's number marks a continuous entry, while an older epoch marks a gap and takes the appeared path. Removals are found by scanning the previous frame's node list (≤ B), never all N nodes: a listed entry that is not in the current visible set is pruned. Baseline advancement on the transport occurs only when a frame is actually written, so latest-wins drop and change suppression compose. Within a session the tables and the frame number they are stamped from are touched only by that session's own frame path — the diff reads epochs and baselines, the transport advances the baselines, the previous-frame list, and the frame number on write — so the writes need no atomics. The per-session tables themselves — types, indexing, and sizes — are specified in §5.5.
 
 ### 10.4 Frame Layout
 
@@ -907,7 +912,7 @@ The benchmark topology and its simulator configuration are produced by a **deter
 | FR-AG-01–FR-AG-06 (aggregation/attention) | §8 (§8.1 for FR-AG-06) |
 | FR-VS-01–FR-VS-08 (visibility/LOD/budget/inspection) | §9, §10.3 |
 | FR-TR-01–FR-TR-04 (viewer transport/encoding/sessions) | §10 |
-| FR-CD-01–FR-CD-09 (client/demo) | §11, §3, §7.1 |
+| FR-CD-01–FR-CD-09 (client/demo) | §11, §3, §7.1, §16 |
 | FR-BR-01–FR-BR-05 (benchmark/report) | §15, §4, §7.1 |
 | K1–K11 | §5, §8 (K9), §12, §14, §15 |
 
@@ -962,7 +967,7 @@ One shared 60 Hz pass computes each group's local channels by accumulator propag
 
 ### Decision 3 — Stateful per-viewer change suppression
 
-One persistent session per viewer; each frame reconciles the visible set against the previous frame (appeared → full value, removed → prune, otherwise changed slots as absolute values in their wire widths, ε-filtered in the wire domain); the selected object is streamed at full fidelity; a full keyframe is sent on (re)connect; per-session state is bounded with latest-wins on egress.
+One persistent session per viewer; each frame reconciles the visible set against the last written frame (appeared → full value, removed → prune, otherwise changed slots as absolute values in their wire widths, ε-filtered in the wire domain); the selected object is streamed at full fidelity; a full keyframe is sent on (re)connect; per-session state is bounded with latest-wins on egress.
 
 **Depends on:** Decision 15 — the baseline commits on an actual socket write; a dropped frame does not advance it.
 
@@ -999,7 +1004,7 @@ One background pass at 60 Hz computes every group bottom-up from a **boot-built 
 
 ### Decision 6 — Attention channel (severity and absence)
 
-Each group carries a reserved unitless attention channel (reduction `max`) on the fixed severity scale (normal, advisory, warning, critical), computed by the aggregation pass and streamed per entry; a device's attention level is the greatest of its metrics' contributions.
+Each group carries a reserved unitless attention channel (reduction `max`) on the fixed severity scale (`normal`, `advisory`, `warning`, `critical`), computed by the aggregation pass and streamed per entry; a device's attention level is the greatest of its metrics' contributions.
 
 **Implements:** PRD-001 FR-TD-11, FR-AG-06, FR-CD-03.
 
@@ -1017,7 +1022,7 @@ Metric identity is the per-device instance `(device, label)`; labels are chosen 
 
 - **Identity.** A reading names `(device_id, metric_label)`; the label binds at boot to a per-device `metric_slot`, and a slot is meaningful only within its device.
 - **Typing.** Each metric instance declares its own unit and attributes (ε, freshness, absence, limits, contributions); at runtime the operands live in the boot-written metric-def array, one entry per slot (§5); no channel combines contributors of different units (FR-AG-02).
-- **State layout.** The state is normalized to one 64-bit slot per metric instance (`value` plus the frame-clock `arrival_ms`, Decision 16), plus a per-device row-offset array (CSR) that groups a device's instances and orders them in leaf order and local-slot order. Rows are exact, so there are no unused slots.
+- **State layout.** The state is normalized to one 64-bit slot per metric instance (`value` plus the frame-clock `arrival_ms`, Decision 16), plus a per-device row pointers array (CSR) that groups a device's instances and orders them in leaf order and local-slot order. Rows are exact, so there are no unused slots.
 - **Aggregation.** At boot each channel records the sorted state offsets of its contributing metric instances; the 60 Hz pass walks those offsets within the group's contiguous block of rows. K9 (≤ 5 µs over ≤ 1,000 contributors) is met by the bounded, prefetch-friendly gather rather than by a single sequential run.
 - **Encode.** A device's whole value set is contiguous, matching the per-entry "all values" requirement (FR-TR-02, §10.3).
 - **Ingest record.** The simulator emits the engine's ingest format directly — a compact little-endian struct `device_index u32, metric_slot u16, value f32` (10 bytes), optionally followed by a `sample_timestamp u64` — with no runtime middleware: both ends derive the bindings from the shared config at boot (§7.1).
@@ -1054,7 +1059,7 @@ The topology definition is three JSON documents — the group and device type li
 
 Variable-length per-node data is held in global structure-of-arrays addressed by ranges, and the aggregation plan is indexed by target channel and executed as a pull.
 
-- **Arrays.** Node-indexed arrays carry `(channel_base, channel_count)` (`[u32; 2]`) and the kind-dependent `row index` (`u32` — state-table row for a leaf, accumulator lane for a group). A global **channel-def array** holds one entry per channel (`unit`, `reduction`, `epsilon`, `limit_base`, `limit_count`, `seed_base`, `seed_count`, `merge_base`, `merge_count` (`u32` each)); a group's channels are contiguous. A global **limit array** holds `{threshold f32, side u8, level u8}`. Global **seed and merge arrays** hold one `u32` per source — a state offset or an accumulator lane — grouped per channel.
+- **Arrays.** Node-indexed arrays carry `(channel_base, channel_count)` (`[u32; 2]`) and the kind-dependent `row base` (`u32` — state-table row for a leaf, accumulator lane for a group). A global **channel-def array** holds one entry per channel (`unit`, `reduction`, `epsilon`, `limit_base`, `limit_count`, `seed_base`, `seed_count`, `merge_base`, `merge_count` (`u32` each)); a group's channels are contiguous. A global **limit array** holds `{threshold f32, side u8, level u8}`. Global **seed and merge arrays** hold one `u32` per source — a state offset or an accumulator lane — grouped per channel.
 - **Pull.** The plan is the seed and merge arrays indexed by target channel: each channel owns a slice of each. The reverse scan — bottom-up, single background thread, writing the write buffer — reduces each channel's seed list (device-leaf order) and then its merge list (child order) and finalises it. This vectorises the reduction, gives an explicit canonical order for exact `sum`/`mean` (Decision 14), needs no pre-clear, and leaves the seed reduction parallelisable if the pass is ever split.
 - **Reserved attention.** One `u8` attention slot per group, outside the channel-def array; never a contribution target; computed from the group's channel limit levels, its direct devices' attention levels, and its children's attention channels.
 - **Alternatives rejected.** Push execution — the background-thread/bottom-up design removes push's only advantage (no cross-source races), leaving its serial read-modify-write chain; pull also avoids a pre-pass buffer clear and yields the canonical order.
