@@ -4,7 +4,7 @@
 | --- | --- |
 | Document ID | TDD-001 |
 | Title | Server-Side Hierarchical Spatial Filtering Engine — Technical Design |
-| Version | 0.15.0 |
+| Version | 0.16.0 |
 | Status | Draft |
 | Last Updated | 2026-10-08 |
 | Owner | Project maintainer |
@@ -91,7 +91,7 @@ Three paths make up the pipeline: the **boot path**, which runs once before serv
 
 **Boot path — once, before serving**
 
-1. The topology definition and its type libraries are loaded and validated, the hierarchical spatial index is built, metric labels are bound to per-device slots, and each channel's contribution list is compiled (§6.2, §6.3). The topology is then fixed until restart (FR-TD-07, FR-TD-08). This boot step runs once and does not repeat on a restart-free server.
+1. The topology definition and its type libraries are loaded and validated, the hierarchical spatial index is built, metric labels are bound to per-device slots, and each channel's contribution list is compiled (§6.1, §6.2). The topology is then fixed until restart (FR-TD-07, FR-TD-08). This boot step runs once and does not repeat on a restart-free server.
 
 **Ingest path — continuous, not frame-bound**
 
@@ -361,9 +361,9 @@ The topology definition is three JSON documents loaded as one source (FR-TD-09):
 
 This section defines the engine's four memory regions together with their addressing and access patterns.
 
-The index holds its nodes in **one flat, parent-first array** (Decision 8). Each node is a group (at any level) or a leaf (device). A leaf stores an **offset into the separate state table**, never its reading (state table, §5.3). Each group's members occupy **one contiguous subtree**; a group's devices occupy a **contiguous block of state rows** (the contiguous-block invariant: §5.3 and §6.3).
+The index holds its nodes in **one flat, parent-first array** (Decision 8). Each node is a group (at any level) or a leaf (device). A leaf stores an **offset into the separate state table**, never its reading (state table, §5.3). Each group's members occupy **one contiguous subtree**; a group's devices occupy a **contiguous block of state rows** (the contiguous-block invariant: §5.3 and §6.2).
 
-Three structural properties hold (R1), each checked at boot (§6.3), alongside the channel and contribution invariants (R3):
+Three structural properties hold (R1), each checked at boot (§6.2), alongside the channel and contribution invariants (R3):
 1. **Contiguous groups** — a group's subtree is a single contiguous range.
 2. **Parent-first layout** — a parent always precedes its descendants.
 3. **Skip-offset pruning** — each internal node stores the size of its subtree, enabling a whole group to be skipped or emitted without descending.
@@ -390,7 +390,7 @@ The engine separates its memory by access pattern into four regions: the **index
 
 | Array | Element | Type | Purpose | Note |
 | --- | --- | --- | --- | --- |
-| kind | leaf device or internal group | enum (`u8`) | Visibility | Finalise a leaf as a device instance and a group as a group entry; kind is stored directly rather than inferred from subtree size, which separates the two only because device-less groups are pruned (§6.2, §9.2, Decision 21). |
+| kind | leaf device or internal group | enum (`u8`) | Visibility | Finalise a leaf as a device instance and a group as a group entry; kind is stored directly rather than inferred from subtree size, which separates the two only because device-less groups are pruned (§6.1, §9.2, Decision 21). |
 | geometry box | AABB min/max | `[f32; 6]` | Visibility | Frustum test and the extent the client draws; the declared `aabb` when present, else the derived box; contains every descendant device position and declared `aabb` (Decision 22). |
 | LOD box | AABB min/max | `[f32; 6]` | Visibility | Projected on-screen height, expansion order, and the entry-budget ranking; always the union of the node's devices' positions (Decision 22). |
 | subtree size | node count | `u32` | Visibility | Subtree bounds and skip-offset pruning; `skip_index = index + subtree_size` is derived, not stored. Node count only — no device-count extent is needed (aggregation uses per-channel offset lists, Decision 7). |
@@ -464,25 +464,21 @@ The **state table** is separate from the index and laid out **device-major in co
 
 ## 6. Hierarchical Spatial Index
 
-### 6.1 Rationale
+### 6.1 Build Algorithm
 
-A straightforward index of device positions cannot answer *both* "what is on screen?" and "what are this group's aggregate channel values?" within budget. The index therefore mirrors the semantic hierarchy and carries bounding volumes, so one traversal yields visibility and aggregation together (Decision 1).
+The topology (nodes and parent-child edges) is fixed by the config; the build **derives** the flat index from it and never invents, reparents, rebalances, or spatially reorders the tree (Decision 1). The derived layout below is the contract: any derivation that produces it conforms, and the §6.2 invariant scan and the §6.3 oracle check the outcomes rather than the method.
 
-### 6.2 Build Algorithm
+**Derived layout.** One canonical order fixes every derived fact:
 
-The topology (nodes and parent-child edges) is fixed by the config; the build **derives** the flat index from it and never invents, reparents, rebalances, or spatially reorders the tree (Decision 1). A pre-pass resolves `type` references against the loaded libraries, buckets each node under its parent in list order, and validates the tree (single root, acyclic, devices reachable); one DFS in that canonical order then produces the layout and all derived per-node fields:
+1. **Numbering and shape.** Nodes fill one flat, parent-first array numbered `id = position` in preorder over children in declared list order: parents precede children, each subtree is contiguous, and each node records its kind (leaf device / internal group), its channel definitions, and — for a leaf — its state offset (Decision 8).
+2. **Boxes.** A group's **LOD box** is the union of its children's LOD boxes (a leaf's box is its device position), and its **geometry box** is the declared `aabb` when present, else the union of its children's geometry boxes — device-less children included (Decision 22); `subtree_size` counts the subtree's nodes and `child_count` the direct children. The unions make the layout **order-invariant**: sibling order cannot tighten a bound or improve pruning, so no spatial construction (median split, SAH, or BVH build) is performed and pruning quality is inherited from the config's containment structure.
+3. **Leaf order and aggregation layout.** Leaf order is the device DFS order, the state table's device dimension (§5); retained groups hold their accumulator lane range in bottom-up order — a group's `row base` is its lane start, length `channel_count` (§5). Each group records its contribution sources (per local channel, the metric instances and child channels that feed it, validated for same unit and same reduction), including each channel's seed list (the sorted contributing state offsets) and merge list (the contributing channels' accumulator lanes) for the aggregation pass (§5, §8).
+4. **Bindings.** Each device's metric labels bind to per-device slots (`metric_label → metric_slot`).
+5. **Exclusions.** Groups with no device descendant are excluded from the index, decided bottom-up after device placement, so a retained group's LOD box is always the union of a non-empty set; merge sources whose child group is excluded are dropped at build — the child channel is valueless by construction (FR-AG-04) — so every contribution source corresponds to a recorded channel definition (Decision 21).
 
-1. **Preorder (on entry):** assign `id = position`, emit the node into the flat array, record its kind (leaf device / internal group) and its channel definitions, and record a leaf's state offset. Recurse into children in canonical (list) order (Decision 8).
-2. **Postorder (on exit):** set a group's **LOD box** to the union of its children's LOD boxes (a leaf's box is its device position) and its **geometry box** to the declared `aabb` when present, else to the union of its children's geometry boxes — device-less children included — and its devices' positions (Decision 22); set `subtree_size = nodes emitted in this subtree` (node count) and `child_count` = emitted direct children. This also yields the parent-first flattening and the contiguous-subtree invariant directly. Retained groups then receive their accumulator lane range in this bottom-up order (a group's `row base` is its lane start, length `channel_count`).
-3. Record the **leaf order** (devices in DFS visit order) — the order used to lay out the state table's device dimension (§5) — and each group's **contribution sources** (per local channel, the metric instances and child channels that feed it, validated for same unit and same reduction), including each channel's seed list (the sorted contributing state offsets) and merge list (the contributing channels' accumulator lanes) for the aggregation pass (§5, §8).
-4. Bind each device's metric labels to per-device slots (`metric_label → metric_slot`) and validate the invariants below.
-5. Run a **cheap post-build invariant scan** (contiguity, parent-first, skip-offsets, contribution integrity).
+**Derivation.** A pre-pass resolves `type` references against the loaded libraries, buckets each node under its parent in list order, and validates the tree (single root, acyclic, devices reachable); one sequential DFS in that order derives every fact above in a single pass (Decision 12). A leaf's AABB is the device position (a degenerate point); frustum tests are inclusive and the brute-force reference uses the identical point test (Decision 12).
 
-A single pass therefore yields ids, layout, AABBs, subtree sizes, child counts, leaf order, channel definitions, contribution sources, state offsets, and the accumulator layout. Because a parent's LOD box is the union of its children's, it is **order-invariant**; ordering siblings spatially cannot tighten any bound or improve pruning, so no spatial construction (median split, SAH, or BVH build) is performed. Pruning quality is inherited from the config's containment structure.
-
-A leaf's AABB is the device position (a degenerate point); frustum tests are inclusive and the brute-force reference uses the identical point test (Decision 12). Groups with no device descendant are excluded from the index, decided bottom-up after device placement, so a retained group's LOD box is always the union of a non-empty set. Merge sources whose child group is excluded are dropped at build — the child channel is valueless by construction (FR-AG-04) — so every contribution source corresponds to a recorded channel definition (Decision 21).
-
-### 6.3 Invariants and Validation
+### 6.2 Invariants and Validation
 
 | Invariant | Check | Failure response |
 | --- | --- | --- |
@@ -506,13 +502,13 @@ Unit and reduction scans apply to configured channels and their contributions; t
 
 **Validation order and diagnostics.** Checks run on the resolved config (§4) in stages: (1) schema — unknown and kind-inapplicable fields, and mutually exclusive declarations such as a group node carrying both `type` and `channels` (FR-TD-08, Decision 20), (2) structural (FR-TD-07), (3) device/metric (FR-TD-04), (4) channels (FR-TD-05), (5) contributions (FR-TD-06/08), (6) limits/absence (FR-TD-11/08), then (7) the post-build invariants above. Validation is **fail-fast**: the first fault aborts boot with a structured diagnostic — `{code, node id, metric label / channel id, message}` — precise enough to locate the fault (FR-TD-07, Decision 12). Codes are stable and prefixed by stage (`E-SCHEMA`, `E-STRUCT`, `E-METRIC`, `E-CHANNEL`, `E-CONTRIB`, `E-LIMIT`, `E-INVARIANT`).
 
-### 6.4 Correctness Oracle
+### 6.3 Correctness Oracle
 
 Correctness is established against an **independent brute-force reference**, not a third-party spatial structure. The reference operates on the **flat device list directly** — it does not walk the index tree, so it does not share any traversal or pruning defect it is meant to catch. For the same `(topology, state, camera, selection)` it frustum-tests every device position (using the same inclusive point test as the engine, Decision 12), computes the ranked cut, and reduces the same readings; the engine's traversal agrees on the visible device-leaf set and its selection matches the reference cut. This mirrors the brute-force scalar reference used for aggregation (§8, §14), giving one independent reference per subsystem (R1).
 
-The semantic n-ary tree has no shared basis with a binary spatial BVH, so the `bvh` crate is not used. Structural invariants (§6.3) cover the layout; the reference covers traversal and selection.
+The semantic n-ary tree has no shared basis with a binary spatial BVH, so the `bvh` crate is not used. Structural invariants (§6.2) cover the layout; the reference covers traversal and selection.
 
-### 6.5 Traversal
+### 6.4 Traversal
 
 - Descend the tree with frustum tests on geometry boxes.
 - **Prune** a subtree when it is outside the frustum or when the group projects below the on-screen-size threshold (skip-offset pruning).
@@ -614,12 +610,12 @@ The query produces a per-viewer, per-frame **visibility result**: a bounded list
 
 The frontier (the current cut) is held in a **max-heap keyed on exact projected on-screen height**, not in a traversal stack, so selection is best-first: the largest visible node is expanded first, regardless of its depth or position in the array. The heap is a **fixed-capacity, per-viewer scratch buffer**, reused every frame and sized to the entry budget `B` (the frontier can never exceed `B`). The index (node ids, layout, AABBs) is immutable after boot (§5), so the heap carries only node references and per-frame heights; each node enters the frontier at most once per query.
 
-**Projected on-screen height** is the vertical pixel extent of the node's **LOD box** — the union of its devices' positions (Decision 22): its eight corners are transformed to screen space at that box's centre depth, and the key is `max_y − min_y` in device pixels (pixel ratio applied). The engine and the brute-force reference compute the identical value, so the frontier's total order is reproducible (§6.4); the monotonicity of projected height down the tree relies on this centre-depth convention.
+**Projected on-screen height** is the vertical pixel extent of the node's **LOD box** — the union of its devices' positions (Decision 22): its eight corners are transformed to screen space at that box's centre depth, and the key is `max_y − min_y` in device pixels (pixel ratio applied). The engine and the brute-force reference compute the identical value, so the frontier's total order is reproducible (§6.3); the monotonicity of projected height down the tree relies on this centre-depth convention.
 
 1. Project the root; if it intersects the frustum, push it onto the frontier with its projected height.
 2. Repeat while an expandable candidate remains:
    - Pop the node with the **greatest projected height**. Exact height is the primary key; node id is the terminal tie-break, giving a total, deterministic order.
-   - Finalise the node as an entry when any terminal condition holds: a device leaf becomes a device instance entry; a group whose published availability bit is clear — no local channel reports a value — becomes a group entry carrying no value (FR-AG-04); a height below the applicable size threshold becomes a blended group entry (enter 120 px, or exit 100 px once expanded; §9.3); and a node whose expansion would breach the budget becomes a blended group entry. Groups with no device descendant never enter the index and are never emitted (§6.2).
+   - Finalise the node as an entry when any terminal condition holds: a device leaf becomes a device instance entry; a group whose published availability bit is clear — no local channel reports a value — becomes a group entry carrying no value (FR-AG-04); a height below the applicable size threshold becomes a blended group entry (enter 120 px, or exit 100 px once expanded; §9.3); and a node whose expansion would breach the budget becomes a blended group entry. Groups with no device descendant never enter the index and are never emitted (§6.1).
    - A group whose **LOD box is degenerate** (a single device, or coincident devices) projects to 0 px at every distance, so the size threshold would blend it forever: it is exempt from the size threshold and expands when its parent expands, subject to the entry budget (Decision 21).
    - Otherwise **expand** it: remove it; for each direct child, apply the frustum test and push only the visible children with their projected heights. Expansion is permitted only while `entries − 1 + deg(v) ≤ B` (`B` ≈ 5,000), and adds `deg(v) − 1` to `entries`, the running cut size (`finalised entries + frontier nodes`). `deg(v)` is O(1) from the node's `child_count` (§5), so a huge-fan-in node is rejected without enumerating its children.
 3. Halt when no expandable candidate remains; every node still held is finalised (leaves as device instances, internal nodes as summaries). The output is the union of finalised nodes.
@@ -922,40 +918,40 @@ Each decision states its decision in the first sentence, gives labelled aspects 
 
 | # | Decision | Recorded in |
 | --- | --- | --- |
-| 1 | One hierarchy serves both visibility and aggregation; frontier ordered by exact projected height | §2, §4, §6.1, §6.2, §9.2–§9.4, §14 |
+| 1 | One hierarchy serves both visibility and aggregation; frontier ordered by exact projected height | §2, §4, §6.1, §9.2–§9.4, §14 |
 | 2 | Aggregation by accumulator propagation over per-group channels | §8 |
 | 3 | Stateful per-viewer change suppression | §10 |
-| 4 | Per-group local channels — identity and policy — with explicit contributions | §2, §3.1, §4, §5, §6.2, §7, §8 |
+| 4 | Per-group local channels — identity and policy — with explicit contributions | §2, §3.1, §4, §5, §6.1, §7, §8 |
 | 5 | Aggregation execution: always-on 60 Hz background pass | §2, §5, §8 |
 | 6 | Attention channel (severity and absence) | §3.1, §5, §8.1, §10.2, §10.3, §14 |
-| 7 | Metric identity and state layout: device-local labels, per-device instances, device-major state | §2, §4, §5, §5.1, §6.2, §6.3, §7, §7.1, §10.4 |
-| 8 | Canonical child order and child enumeration | §4, §5, §6.2, §6.3, §9.2 |
-| 9 | Config schema: JSON flat node list, explicit fields, shallow templates | §2, §4, §6.2, §8.1, §11, §15.2 |
+| 7 | Metric identity and state layout: device-local labels, per-device instances, device-major state | §2, §4, §5, §5.1, §6.1, §6.2, §7, §7.1, §10.4 |
+| 8 | Canonical child order and child enumeration | §4, §5, §6.1, §6.2, §9.2 |
+| 9 | Config schema: JSON flat node list, explicit fields, shallow templates | §2, §4, §6.1, §8.1, §11, §15.2 |
 | 10 | Index layout for channel definitions and contributions; aggregation direction | §3.2, §5, §8 |
 | 11 | Wire identity | §5, §9.2, §10.3, §10.4, §10.5 |
-| 12 | Hierarchy build details | §2, §6.2–§6.4 |
+| 12 | Hierarchy build details | §2, §6.1–§6.3 |
 | 13 | Benchmark host spec, fixed benchmark topology, and simulator configuration | §15 |
-| 14 | Canonical reduction order and SIMD | §5, §6.5, §8, §10.2, §14, §15.3 |
+| 14 | Canonical reduction order and SIMD | §5, §6.4, §8, §10.2, §14, §15.3 |
 | 15 | Transport encoding, keyframes, and egress | §2, §10.2–§10.4 |
 | 16 | State-table concurrency: lock-free atomics, overwrite back-pressure, freshness storage, frame clock | §2, §3.2, §5, §7 |
 | 17 | Client rendering: InstancedMesh over a pre-allocated VBO | §2, §11.1 |
 | 18 | Technology stack: Rust engine, simulator, and harness; Three.js client over WebGL; WebSocket binary transport; Vite/TypeScript demo tooling | §2, §3, §10.1, §16 |
 | 19 | Engine configuration defaults: budget hysteresis Δ = 10% of `B`; camera-context timeout 1 s | §9.1, §9.3, §9.5 |
 | 20 | Type templates and policy overrides: the type libraries supply a device's `metrics` and a group's `channels` with their `policy`; a node refines policy fields per key; expanded at boot before validation | §4, §15.2 |
-| 21 | Group retention and degenerate LOD boxes: prune groups with no device descendant bottom-up; degenerate groups bypass the size threshold | §4, §5, §6.2, §9.2, §9.3, §14 |
-| 22 | Declared group extents: optional per-group `aabb` with boot containment; geometry box (declared or derived) for culling and drawing, LOD box (derived) for projected height | §4, §5, §6.2, §6.3, §9.2, §11, §14 |
+| 21 | Group retention and degenerate LOD boxes: prune groups with no device descendant bottom-up; degenerate groups bypass the size threshold | §4, §5, §6.1, §9.2, §9.3, §14 |
+| 22 | Declared group extents: optional per-group `aabb` with boot containment; geometry box (declared or derived) for culling and drawing, LOD box (derived) for projected height | §4, §5, §6.1, §6.2, §9.2, §11, §14 |
 | 23 | Simulator operating parameters: rates and value models in a unit-keyed simulator profile — the simulator's configuration file — versioned with the report | §7.1 |
 
 ### Decision 1 — Frontier ordering
 
 The frontier is a fixed-capacity **max-heap keyed on exact projected on-screen height**, with node id as the terminal tie-break.
 
-- **Structure.** The hierarchy is the single structure driving visibility and aggregation; the state table is a separate flat value store aligned to leaf order.
+- **Structure.** The hierarchy is the single structure driving visibility and aggregation; the state table is a separate flat value store aligned to leaf order. A straightforward index of device positions cannot answer *both* "what is on screen?" and "what are this group's aggregate channel values?" within budget, so the index mirrors the semantic hierarchy and carries bounding volumes — one traversal yields visibility and aggregation together.
 - **Primary key.** Exact height is the primary key.
 - **Ordering function.** Ordering is a pure function of `(topology, state, camera, selection)`; node id is a terminal tie-break for equal heights only. The index is immutable after boot, so the frontier holds node references and per-frame heights.
 - **Bounds.** Heap operations are `O(log B)`; the frontier is bounded by `B` ≈ 5,000.
 - **Budget-edge flicker.** Handled by the entry-count hysteresis in §9.3.
-- **Alternatives rejected.** Bucketed ordering with a bucket size-error bound or a bucket-width parameter.
+- **Alternatives rejected.** Bucketed ordering with a bucket size-error bound or a bucket-width parameter; a flat device-position index serving visibility beside a separate aggregation structure — it cannot answer both queries within budget.
 
 ### Decision 2 — Accumulator propagation
 
@@ -1081,7 +1077,7 @@ The hierarchy build is a single sequential pass over the resolved config, and va
 - **Leaf AABB.** A leaf's AABB is the device position (degenerate point); frustum tests are inclusive, and the brute-force reference uses the identical point test. There is no AABB inflation. A leaf's projected height is degenerate, which is harmless: a device leaf is terminal by kind, and the size threshold only decides group blending.
 - **Positions.** Non-finite positions (NaN/Inf) are rejected at boot; coincident positions are legal and separated by the node-id tie-break.
 - **Build parallelism.** The layout DFS is sequential — O(N) and not the K8 bottleneck. K8 is treated as a config-parse and validation budget.
-- **Validation.** Checks run on the resolved config in seven stages — schema (FR-TD-08), structural (FR-TD-07), device/metric (FR-TD-04), channels (FR-TD-05), contributions (FR-TD-06/08), limits/absence (FR-TD-11/08), post-build invariants (§6.3) — and are fail-fast: the first fault aborts boot with a structured diagnostic `{code, node id, metric label / channel id, message}`.
+- **Validation.** Checks run on the resolved config in seven stages — schema (FR-TD-08), structural (FR-TD-07), device/metric (FR-TD-04), channels (FR-TD-05), contributions (FR-TD-06/08), limits/absence (FR-TD-11/08), post-build invariants (§6.2) — and are fail-fast: the first fault aborts boot with a structured diagnostic `{code, node id, metric label / channel id, message}`.
 - **Alternatives rejected.** A parallel layout DFS — the sequential walk is O(N) and not the K8 bottleneck; a pre-emptive streaming parse — parsing is optimised only if measurement demands it.
 
 ### Decision 13 — Benchmark host, topology, and simulator configuration
@@ -1165,7 +1161,7 @@ A group is retained in the index only if it has at least one device descendant, 
 - **Pruning.** A group with no device descendant — empty, or inherited from a type with nothing attached — is accepted (FR-TD-07) and pruned, so every retained group's LOD box is the union of a non-empty set.
 - **Contribution sources.** Merge sources whose child group is pruned are dropped at build, so every contribution source corresponds to a recorded channel definition; the pruned group's channels are valueless by construction (FR-AG-04), its accumulators are never allocated, and its attention is normal, so the parent's maximum is unchanged.
 - **Degenerate sizing.** A group whose LOD box is degenerate projects to 0 px at every distance, so the size threshold would blend it forever; exempting it restores FR-CD-04's bring-into-view path, while the entry budget and the budget band (§9.3) still bound it.
-- **Sharing.** Pruning and sizing are pure functions of the config and the camera, so the engine and the brute-force reference apply identical rules (§6.4).
+- **Sharing.** Pruning and sizing are pure functions of the config and the camera, so the engine and the brute-force reference apply identical rules (§6.3).
 - **Alternatives rejected.** Nominal AABB inflation — it requires a magic extent and a matching rule in the brute-force reference, and it contradicts the no-inflation rule for leaves (Decision 12); rejecting device-less groups — FR-TD-07 requires that groups may be empty; emitting pruned groups — their LOD box is the union of an empty set and they stream no values.
 
 ### Decision 22 — Declared group extents
@@ -1173,7 +1169,7 @@ A group is retained in the index only if it has at least one device descendant, 
 A group may declare an `aabb` — two corner points that contain every device position and every declared `aabb` in its subtree. Each node keeps two boxes: a **geometry box** (the declared `aabb`, else the union of its children's geometry boxes and device positions) for frustum tests and for the transform the client draws, and an **LOD box** (always the union of the node's devices' positions) for projected on-screen height.
 
 - **Why two boxes.** Geometry governs culling and rendering, so the drawn marker and the culled box are the same box and markers do not pop at frustum edges. LOD governs expansion, which follows the spread of a group's devices: that is what FR-VS-05 measures (`too small on screen to show its individual devices`) and what FR-VS-07's largest-on-screen ranking spends the entry budget on.
-- **Validation.** The field is optional, so a topology that declares none boots unchanged. When present, a boot check places every descendant device position and every descendant declared `aabb` inside it, which makes culling on that box incapable of hiding an in-view device or an in-view descendant extent (FR-TD-07, §6.3).
+- **Validation.** The field is optional, so a topology that declares none boots unchanged. When present, a boot check places every descendant device position and every descendant declared `aabb` inside it, which makes culling on that box incapable of hiding an in-view device or an in-view descendant extent (FR-TD-07, §6.2).
 - **Geometry is never templated.** `aabb` and `position` are declared on the node itself — absolute coordinates hold only for that instance, the same reason template-provided positions were rejected (Decision 20).
 - **Cost.** One extra box per index node (6 × f32 ≈ 2.4 MB at 100k, boot-time and immutable), an O(nodes) containment check, and no wire change: the client derives the geometry box from the shared config (FR-TD-09, §11).
 - **Pruning unchanged.** A declared `aabb` exempts nothing from Decision 21: a group with no devices has no values to stream. Its box still joins every ancestor's derived geometry box — a device-less room remains part of its floor's extent — while it enters no index and draws nothing itself.
