@@ -4,7 +4,7 @@
 | --- | --- |
 | Document ID | TDD-001 |
 | Title | Server-Side Hierarchical Spatial Filtering Engine — Technical Design |
-| Version | 0.16.0 |
+| Version | 0.17.0 |
 | Status | Draft |
 | Last Updated | 2026-10-08 |
 | Owner | Project maintainer |
@@ -29,7 +29,7 @@ Guiding rule: **the browser draws; the server thinks.** All heavy work is perfor
 | Egress ≤ 0.3 MB/s per client at 100k (≥ 99% cut); ≤ 0.15 MB/s at 50,000 (≥ 99% cut); ≤ 0.05 MB/s at 4,280 (≥ 98.5% cut) — for the benchmark topology's configured channel set, including per-entry attention values (K5, G4) | f16 quantisation + per-value ε filter (metric/channel) + change suppression (Decision 15). | §15.1, §15.3 |
 | Stable 60 FPS, main-thread overhead < 3 ms/frame (K6, G2) | InstancedMesh with a pre-allocated VBO; per-frame instance writes without allocation (Decision 17). | §12, §15.3 |
 | No monotonic heap growth in steady state; no allocation-driven frame spikes (K7) | Pre-allocated buffers (Decision 17); per-session state bounded (FR-TR-04). | §15.3 |
-| Boot ≤ 30 s from topology file to fully loaded and serving at 100k devices (K8) | Sequential single-pass build; the budget is dominated by config parse and validation (Decision 12). | §15.3 |
+| Boot ≤ 30 s from topology file to fully loaded and serving at 100k devices (K8) | Sequential single-pass build; the budget is dominated by config parse, materialization, and validation (Decision 12). | §15.3 |
 | ≤ 5 µs per channel per group with up to 1,000 contributing readings (K9) | Boot-recorded per-channel contribution offset lists walked as a bounded gather within the group's contiguous rows (Decision 7). | §12, §15.3 |
 | ≥ 10 concurrent browser sessions at 60 Hz at 100k devices; ≤ 50% aggregate server CPU; per-client egress within K5 (K10) | Aggregation pass independent of viewer count (Decision 5); per-viewer cost O(visible); per-session state bounded (FR-TR-04). | §15.3 |
 | Update freshness p99 ≤ 100 ms from a reading accepted by the engine to the rendered change in the client, at 60 Hz and the building scale (~4,280 devices) (K11) | Stage budgets compose into an end-to-end path shorter than the freshness target. | §12, §15.3 |
@@ -73,15 +73,15 @@ Each row lists the component's primary PRD-001 coverage; a requirement that span
 
 | Component | Responsibility | PRD coverage |
 | --- | --- | --- |
-| Simulator | Generate topology-driven telemetry at configurable rates from the shared topology. | FR-TD-09, FR-CD-07, FR-CD-09 |
+| Simulator | Generate topology-driven telemetry at configurable rates from the resolved manifest (§4.6). | FR-TD-09, FR-CD-07, FR-CD-09 |
 | Ingestor | Accept readings; apply latest-wins to the state table; reject invalid readings; sustain the offered stream without unbounded buffering. | FR-IS-01, FR-IS-02, FR-IS-05, FR-CD-09 |
 | State table | Hold exactly one current value and its frame-clock arrival stamp per (device, metric); availability derived per pass; device-major layout per §5. | FR-IS-01, FR-IS-03, FR-IS-04, FR-CD-09 |
-| Index builder | Load and validate the topology definition and its type libraries; build the hierarchical spatial index; bind metric labels to per-device slots. | FR-TD-01–FR-TD-11, FR-CD-09 |
+| Index builder | Load and validate the topology definition and its type libraries; materialize the resolved manifest (§4.6); build the hierarchical spatial index from it; bind metric labels to per-device slots. | FR-TD-01–FR-TD-11, FR-CD-09 |
 | Aggregator | Compute each group's channels and attention value once per frame from device readings and child-channel contributions; double-buffered. | FR-TD-05, FR-TD-06, FR-TD-10, FR-TD-11, FR-AG-01–FR-AG-06, FR-CD-09 |
 | Visibility engine | Accept camera context and selection; frustum-cull and best-first refine the hierarchy into a bounded entry cut. | FR-VS-01–FR-VS-08, FR-TD-10, FR-CD-09 |
 | Encoder | Quantise, ε-filter, and suppress unchanged values per viewer; stream the selected object at full fidelity. | FR-TR-02, FR-VS-02, FR-CD-09 |
 | Transport | WebSocket server + binary framing + sessions; ingress for camera context and inspection target. | FR-TR-01, FR-TR-03, FR-TR-04, FR-VS-01, FR-VS-02, FR-CD-09 |
-| Browser 3D client | Render instances, publish camera, pick objects, select display value; load the shared topology. | FR-CD-01–FR-CD-06, FR-CD-09, FR-TD-09 |
+| Browser 3D client | Render instances, publish camera, pick objects, select display value; consume the resolved manifest (§4.6). | FR-CD-01–FR-CD-06, FR-CD-09, FR-TD-09 |
 | Demo app | Wire simulator → engine → browser at the building scale (~4,280 devices). | FR-CD-08, FR-CD-09 |
 | Benchmark harness | Produce the fixed benchmark topology; measure and report KPIs. | FR-BR-01–FR-BR-05 |
 
@@ -91,7 +91,7 @@ Three paths make up the pipeline: the **boot path**, which runs once before serv
 
 **Boot path — once, before serving**
 
-1. The topology definition and its type libraries are loaded and validated, the hierarchical spatial index is built, metric labels are bound to per-device slots, and each channel's contribution list is compiled (§6.1, §6.2). The topology is then fixed until restart (FR-TD-07, FR-TD-08). This boot step runs once and does not repeat on a restart-free server.
+1. The topology definition and its type libraries are loaded and validated and materialized into the resolved manifest (§4.6); from the manifest the hierarchical spatial index is built, metric labels are bound to per-device slots, and each channel's contribution list is compiled (§6.1, §6.2). The topology is then fixed until restart (FR-TD-07, FR-TD-08). This boot step runs once and does not repeat on a restart-free server.
 
 **Ingest path — continuous, not frame-bound**
 
@@ -112,11 +112,11 @@ Steps 3 and 5 are independent branches: they share only the frame clock and the 
 
 - **Camera loop:** step 4 → step 5, every frame. Without it the visibility query has no screen geometry and cannot size the LOD threshold (FR-VS-01).
 - **Selection loop:** step 4 → step 5 (force-include the selected object) and → step 6 (stream its values every frame until deselection), on selection change only (FR-VS-02).
-- **Session start:** on (re)connect the transport first sends the node dictionary (§10.5) and a full visible keyframe (FR-TR-03), after which the normal frame path — steps 3 through 8 — resumes carrying incremental frames.
+- **Session start:** on (re)connect the transport first sends the resolved manifest (§10.5) and a full visible keyframe (FR-TR-03), after which the normal frame path — steps 3 through 8 — resumes carrying incremental frames.
 
 ## 4. Topology
 
-The topology definition is three JSON documents loaded as one source (FR-TD-09): a **group type library**, a **device type library**, and the **topology document** — a flat list of nodes, each referencing its parent by id. List order defines sibling order (Decision 8), ids are unique across the topology, and a topology that declares a `type` records which version of each library it requires. PRD-001 §8 fixes this interface and its semantics, leaving the configuration schema to this document, so the three-document split and the version contract are design choices (Decision 9).
+The topology definition is three JSON documents, loaded as one source by the engine (FR-TD-09): a **group type library**, a **device type library**, and the **topology document** — a flat list of nodes, each referencing its parent by id. List order defines sibling order (Decision 8), ids are unique across the topology, and a topology that declares a `type` records which version of each library it requires. The engine materializes the three documents into the resolved manifest (§4.6); the manifest — not the raw documents — is what the engine's arrays, the simulator, and the client consume. PRD-001 §8 fixes this interface and its semantics, leaving the configuration schema to this document, so the three-document split and the version contract are design choices (Decision 9).
 
 ### 4.1 Device type library
 
@@ -352,10 +352,34 @@ The topology definition is three JSON documents loaded as one source (FR-TD-09):
   - Templates are shallow and single-level: a node may reference one `type` — a group's in the group library, a device's in the device library; identity comes from one declaring source per node, so a group takes its channels from `type` or from its own `channels` array, and declaring both is a boot error. A device declares no metric set of its own — its `policy` map refines only the four policy fields, never the metric list or identity. There is no type-extends-type and no per-item merge of channel definitions or metric sets; policy fields refine whole, never element by element (Decision 9, Decision 20).
   - The asymmetry is deliberate: a device's `type` is required, because the simulator configuration addresses device types and no instance ids (§7.1); a group's `type` is optional, because no external configuration addresses groups (Decision 9, Decision 20).
   - Templates expand at boot before validation: group templates first — with each group node's own `channels` and `policy` resolved into its channel set — then device templates, so a device node's `contributes_to` resolves against its containing group's channels as they stand after the group template (Decision 20).
-  - Expansion is deterministic and identical for the simulator, the engine, and the client (FR-TD-09); the runtime still holds one metric instance per `(device, label)` — no template or kind reaches the runtime (Decision 7, Decision 20).
+  - Expansion is deterministic and materialized once, in the resolved manifest (§4.6, FR-TD-09); the runtime still holds one metric instance per `(device, label)` — no template resolution or type indirection reaches the runtime (Decision 7, Decision 20).
 - **Hierarchy scope.**
   - The conventional site → building → room → rack levels are not required; the engine models a generic group tree (FR-TD-01). A physically meaningful hierarchy is assumed for useful level-of-detail; a degenerate or flat hierarchy is accepted and collapses to a single blended entry when zoomed out (FR-VS-05, §9).
   - The same hierarchy drives both spatial lookup and aggregation; there is one structure, not two (Decision 1).
+
+### 4.6 Resolved manifest
+
+The engine parses the three documents exactly once — resolving `type` references against the libraries, merging `policy` into every metric and channel, assigning node indices in canonical preorder, and deriving both boxes — and materializes the result as the **resolved manifest**. The manifest is the single artifact consumed downstream: the engine's own array construction (§5, §6.1), the simulator (§7.1), and the client (§10.5, §11) all read it, and no other component touches the raw documents (FR-TD-09). The manifest exists as a JSON file written at materialization, which fixes the startup order: the engine materializes before serving, the simulator reads the file before it begins emitting, and the session transport delivers the same bytes to the client before the first frame (§10.5).
+
+The manifest is a flat JSON array **in index order — array position is the node index** — whose entries preserve the source fields (`id`, `parent`, `type`, declared `aabb`, original `policy`, `contributes_to`) beside the resolved ones:
+
+| Field | Carried on | Form | Note |
+| --- | --- | --- | --- |
+| `kind` | every node | `group` / `device` | as authored |
+| `id` | every node | config id | unique; the client's identity join |
+| `parent` | every node | config id or `null` | as authored; `null` at the single root |
+| `parent_idx` | every node | index or `null` | parent-first order guarantees `parent_idx < own index`; the pair is consistent iff the node at `parent_idx` carries `id == parent` |
+| `type` | devices (always); groups (when authored) | config id | retained by source preservation; keeps the simulator's profile type-keyed (§7.1) |
+| `position` | devices | `[x, y, z]` | as authored |
+| `aabb` | groups (when authored) | `[[min],[max]]` | as authored, preserved beside its derived boxes |
+| `geometry_box` | groups | `[[min],[max]]` | derived at materialization — declared `aabb` else union (§6.1); the frustum test and the client's draw transform (§11); devices carry no boxes — theirs is their `position` |
+| `lod_box` | groups | `[[min],[max]]` | derived at materialization — the union of its devices' positions (§5.2); projected height and expansion ranking (§9.2) |
+| `metrics` | devices | resolved list | label, unit, and the merged settings per metric; `metric_slot` = array position |
+| `channels` | groups | resolved list | id, reduction, and the merged settings per channel |
+| `policy` | devices and groups (when authored) | map | as authored, beside the merged settings |
+| `contributes_to` | devices and groups (when authored) | map | as authored; the build resolves it against the resolved `metrics` and `channels` to record contribution sources (§6.1) |
+
+**Invariants.** Entries are in canonical preorder, so parents precede children, subtrees are contiguous, and a device's position among device entries is its `device_index` (leaf order — §5.3, §7.1). Only nodes present in the index appear: groups with no device descendant are excluded, their extents already folded into their ancestors' boxes (FR-TD-09, Decision 21). Serialization is byte-stable — fixed key order and float format — so an unchanged topology yields a byte-identical manifest, which makes a checked-in manifest the golden conformance fixture, regenerated and cross-checked by an independent reference expansion (§14).
 
 ## 5. Memory Layout
 
@@ -379,7 +403,7 @@ The engine separates its memory by access pattern into four regions: the **index
 
 ### 5.1 Reading Model
 
-- Each reading is `(device_index, metric_slot, value)`; the device id → `device_index` and the `(device, metric_label)` → `metric_slot` bindings are resolved at boot from the shared config, identically by the simulator and the engine, so no string key reaches the runtime, and the value is applied to the state table (Decision 7).
+- Each reading is `(device_index, metric_slot, value)`; the device id → `device_index` and the `(device, metric_label)` → `metric_slot` bindings are resolved at boot from the resolved manifest (§4.6), identically by the simulator and the engine, so no string key reaches the runtime, and the value is applied to the state table (Decision 7).
 - Exactly one current value is retained per `(device, metric)`; concurrent or duplicate values of the same metric are not modelled, and no history is stored.
 - **Latest-wins**: the most recently **received** reading replaces the newest state — arrival order is the only order; network jitter degrades update frequency, never correctness.
 - A device's metrics may become **unavailable** individually when stale (freshness timeout); this is represented explicitly and encoded as a NaN marker on the wire (FR-IS-03).
@@ -466,17 +490,17 @@ The **state table** is separate from the index and laid out **device-major in co
 
 ### 6.1 Build Algorithm
 
-The topology (nodes and parent-child edges) is fixed by the config; the build **derives** the flat index from it and never invents, reparents, rebalances, or spatially reorders the tree (Decision 1). The derived layout below is the contract: any derivation that produces it conforms, and the §6.2 invariant scan and the §6.3 oracle check the outcomes rather than the method.
+The topology (nodes and parent-child edges) is fixed by the resolved manifest (§4.6); the build **derives** the flat index from it and never invents, reparents, rebalances, or spatially reorders the tree (Decision 1). The derived layout below is the contract: any derivation that produces it conforms, and the §6.2 invariant scan and the §6.3 oracle check the outcomes rather than the method.
 
 **Derived layout.** One canonical order fixes every derived fact:
 
 1. **Numbering and shape.** Nodes fill one flat, parent-first array numbered `id = position` in preorder over children in declared list order: parents precede children, each subtree is contiguous, and each node records its kind (leaf device / internal group), its channel definitions, and — for a leaf — its state offset (Decision 8).
-2. **Boxes.** A group's **LOD box** is the union of its children's LOD boxes (a leaf's box is its device position), and its **geometry box** is the declared `aabb` when present, else the union of its children's geometry boxes — device-less children included (Decision 22); `subtree_size` counts the subtree's nodes and `child_count` the direct children. The unions make the layout **order-invariant**: sibling order cannot tighten a bound or improve pruning, so no spatial construction (median split, SAH, or BVH build) is performed and pruning quality is inherited from the config's containment structure.
+2. **Boxes.** A group's **LOD box** is the union of its children's LOD boxes (a leaf's box is its device position), and its **geometry box** is the declared `aabb` when present, else the union of its children's geometry boxes — device-less children included (Decision 22); both boxes are derived at materialization and carried in the manifest (§4.6). `subtree_size` counts the subtree's nodes and `child_count` the direct children. The unions make the layout **order-invariant**: sibling order cannot tighten a bound or improve pruning, so no spatial construction (median split, SAH, or BVH build) is performed and pruning quality is inherited from the config's containment structure.
 3. **Leaf order and aggregation layout.** Leaf order is the device DFS order, the state table's device dimension (§5); retained groups hold their accumulator lane range in bottom-up order — a group's `row base` is its lane start, length `channel_count` (§5). Each group records its contribution sources (per local channel, the metric instances and child channels that feed it, validated for same unit and same reduction), including each channel's seed list (the sorted contributing state offsets) and merge list (the contributing channels' accumulator lanes) for the aggregation pass (§5, §8).
 4. **Bindings.** Each device's metric labels bind to per-device slots (`metric_label → metric_slot`).
 5. **Exclusions.** Groups with no device descendant are excluded from the index, decided bottom-up after device placement, so a retained group's LOD box is always the union of a non-empty set; merge sources whose child group is excluded are dropped at build — the child channel is valueless by construction (FR-AG-04) — so every contribution source corresponds to a recorded channel definition (Decision 21).
 
-**Derivation.** A pre-pass resolves `type` references against the loaded libraries, buckets each node under its parent in list order, and validates the tree (single root, acyclic, devices reachable); one sequential DFS in that order derives every fact above in a single pass (Decision 12). A leaf's AABB is the device position (a degenerate point); frustum tests are inclusive and the brute-force reference uses the identical point test (Decision 12).
+**Derivation.** Materialization (§4.6) resolves and orders the nodes and derives both boxes; one sequential pass over the manifest then derives every layout fact it does not carry — the numbering and boxes arrive with it — while validating the tree (single root, acyclic, devices reachable) (Decision 12). A leaf's AABB is the device position (a degenerate point); frustum tests are inclusive and the brute-force reference uses the identical point test (Decision 12).
 
 ### 6.2 Invariants and Validation
 
@@ -500,7 +524,7 @@ The topology (nodes and parent-child edges) is fixed by the config; the build **
 
 Unit and reduction scans apply to configured channels and their contributions; the reserved attention channel is excluded (it combines only unitless levels).
 
-**Validation order and diagnostics.** Checks run on the resolved config (§4) in stages: (1) schema — unknown and kind-inapplicable fields, and mutually exclusive declarations such as a group node carrying both `type` and `channels` (FR-TD-08, Decision 20), (2) structural (FR-TD-07), (3) device/metric (FR-TD-04), (4) channels (FR-TD-05), (5) contributions (FR-TD-06/08), (6) limits/absence (FR-TD-11/08), then (7) the post-build invariants above. Validation is **fail-fast**: the first fault aborts boot with a structured diagnostic — `{code, node id, metric label / channel id, message}` — precise enough to locate the fault (FR-TD-07, Decision 12). Codes are stable and prefixed by stage (`E-SCHEMA`, `E-STRUCT`, `E-METRIC`, `E-CHANNEL`, `E-CONTRIB`, `E-LIMIT`, `E-INVARIANT`).
+**Validation order and diagnostics.** Checks run on the raw topology and its manifest (§4, §4.6) in stages: (1) schema — unknown and kind-inapplicable fields, and mutually exclusive declarations such as a group node carrying both `type` and `channels` (FR-TD-08, Decision 20), (2) structural (FR-TD-07), (3) device/metric (FR-TD-04), (4) channels (FR-TD-05), (5) contributions (FR-TD-06/08), (6) limits/absence (FR-TD-11/08), then (7) the post-build invariants above. Validation is **fail-fast**: the first fault aborts boot with a structured diagnostic — `{code, node id, metric label / channel id, message}` — precise enough to locate the fault (FR-TD-07, Decision 12). Codes are stable and prefixed by stage (`E-SCHEMA`, `E-STRUCT`, `E-METRIC`, `E-CHANNEL`, `E-CONTRIB`, `E-LIMIT`, `E-INVARIANT`).
 
 ### 6.3 Correctness Oracle
 
@@ -535,14 +559,14 @@ The simulator is a device-level reading producer. It emits one ingest record per
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `device_index` | yes | boot-assigned device ordinal (leaf order), bound from the device id in the shared config |
-| `metric_slot` | yes | per-device metric index (slot), bound from a `(device, metric_label)` pair at boot using the shared config schema; labels are device-local, so a slot is meaningful only within its device; no string keys at runtime |
+| `device_index` | yes | boot-assigned device ordinal (leaf order): the device's position among the manifest's device entries (§4.6), bound from the device id |
+| `metric_slot` | yes | per-device metric index (slot), bound from a `(device, metric_label)` pair at boot from the resolved manifest (§4.6); labels are device-local, so a slot is meaningful only within its device; no string keys at runtime |
 | `value` | yes | raw scalar at source precision; quantisation to f16 happens in transport (§10.2), not here |
 | `sample_timestamp` | no | ignored by the state table (latest-wins); retained for debugging and rate accounting |
 
-Fields derived from the topology — position, unit, epsilon, group ids — are not emitted; the simulator, the engine, and the client read the same topology definition, so device indices, per-device metric slots, and positions align.
+Fields derived from the topology — position, unit, epsilon, group ids — are not emitted; the simulator, the engine, and the client all consume the same resolved manifest (§4.6), so device indices, per-device metric slots, and positions align.
 
-The simulator emits this record in the engine's ingest format directly. There is no runtime middleware; the only translation is the boot-time, per-device `metric_label` → `metric_slot` binding (and the device id → `device_index` binding), performed identically by both sides. The ingest record is a compact little-endian struct: `device_index u32, metric_slot u16, value f32` (10 bytes), optionally followed by a `sample_timestamp u64` (Decision 7).
+The simulator emits this record in the engine's ingest format directly. There is no runtime middleware; the only translation is the boot-time, per-device `metric_label` → `metric_slot` binding (and the device id → `device_index` binding), read from the same manifest by both sides (§4.6). The ingest record is a compact little-endian struct: `device_index u32, metric_slot u16, value f32` (10 bytes), optionally followed by a `sample_timestamp u64` (Decision 7).
 
 The simulator supports:
 
@@ -622,7 +646,7 @@ The frontier (the current cut) is held in a **max-heap keyed on exact projected 
 
 A child's LOD box is contained by its parent's LOD box, so projected height is **monotone** down the tree: a child is never taller on screen than its parent. Geometry boxes likewise nest — each group's contains its children's — and take no part in this ordering. The frontier therefore always holds an upper bound for every unexplored subtree, the maximum-height pop cannot miss the largest remaining node, and no node is revisited.
 
-Each entry carries its kind, its identity — the flat-array node index, resolved to a config identity through the connect-time dictionary (§10.3, Decision 11) — and a **transition flag** (appeared, removed, or expanded) relative to the viewer's previous frame; `expanded` is internal to visibility and surfaces on the wire as appeared entries for the newly revealed devices (§9.3, §10.4). Values are not resolved by the query: the encoder maps each index to its source at encode time (§10.3). The result is deterministic given `(topology, state, camera, selection)`, with `entries ≤ B`; the per-viewer frontier is bounded by `B`. The viewer's selected object (FR-VS-02) is force-included every frame, adding at most one entry beyond the cut.
+Each entry carries its kind, its identity — the flat-array node index, resolved to a config identity through the connect-time manifest (§10.3, Decision 11) — and a **transition flag** (appeared, removed, or expanded) relative to the viewer's previous frame; `expanded` is internal to visibility and surfaces on the wire as appeared entries for the newly revealed devices (§9.3, §10.4). Values are not resolved by the query: the encoder maps each index to its source at encode time (§10.3). The result is deterministic given `(topology, state, camera, selection)`, with `entries ≤ B`; the per-viewer frontier is bounded by `B`. The viewer's selected object (FR-VS-02) is force-included every frame, adding at most one entry beyond the cut.
 
 ### 9.3 Anti-Flicker
 
@@ -687,7 +711,7 @@ scalar value ──► width convert ──► per-value ε filter ──► emi
 | Keyframes | Full visible keyframe on (re)connect; appeared entries sent in full on expansion or visibility change; on-demand resync on a sequence gap; no periodic keyframe (Decision 15). |
 | Unavailable values | Explicit NaN marker on the wire for a device metric stale under the frame-clock test or a channel with no available contribution in the step-3 snapshot, sent regardless of the ε filter. |
 | Sequence | Frames carry a monotonic sequence assigned when the frame is written, so a latest-wins drop never causes a sequence gap; clients discard duplicates and request a keyframe on a detected gap. |
-| Wire identity | Per-frame entries are keyed by the server node index (u32). On (re)connect the server sends the **dictionary** — every node in the index, in chunks (§10.5) — mapping each node index to `(kind, config id)`; the client resolves position, units, metric labels, and channel meanings from the shared config (FR-TD-09). Indices are per-build and not stable across restarts; a reconnect gets a fresh dictionary (Decision 11). |
+| Wire identity | Per-frame entries are keyed by the server node index (u32). On (re)connect the server sends the **resolved manifest** — every node in the index, in chunks (§10.5) — carrying each node's identity and resolved fields; the client resolves positions, units, metric labels, and channel meanings from it (FR-TD-09). Indices are per-build and not stable across restarts; a reconnect gets a fresh manifest (Decision 11). |
 | Slow clients | Stale frames are dropped (latest-wins on egress) and do not advance the baseline; per-session state is bounded (Decision 15). |
 | Inspection target | A selected device or group is streamed every frame at full fidelity until deselected; the ε filter does not suppress it. |
 
@@ -705,7 +729,7 @@ Implementation is a dense-integer diff — O(visible value slots) per viewer per
 
 ### 10.4 Frame Layout
 
-Little-endian. Every message begins with a `u8 type`; a frame is `type = 0` (the dictionary is `type = 1`, §10.5). All entries and the per-session diff are keyed by node index (Decision 11).
+Little-endian. Every message begins with a `u8 type`; a frame is `type = 0` (the manifest is `type = 1`, §10.5). All entries and the per-session diff are keyed by node index (Decision 11).
 
 ```
 Frame (type = 0):
@@ -727,23 +751,19 @@ Frame (type = 0):
 - `appeared`/`removed` are the wire transitions; the visibility query's internal `expanded` transition (§9.2) is not a wire flag — it materialises as `appeared` entries for the newly revealed devices.
 - `changed_mask` bounds the payload to changed slots; an entry with nothing changed and no attention change is omitted entirely.
 - Attention is sent on change only (Decision 15).
-- A keyframe is the full visible set with every slot present, chunked across frames with the `keyframe`/`keyframe_end` flags when it exceeds a size threshold (default ~64 KB). No wire message exceeds 64 KB; keyframe and dictionary chunks are cut at that bound.
+- A keyframe is the full visible set with every slot present, chunked across frames with the `keyframe`/`keyframe_end` flags when it exceeds a size threshold (default ~64 KB). No wire message exceeds 64 KB; keyframe and manifest chunks are cut at that bound.
 - **Message filling.** Every message is filled to the 64 KB bound and cut between entries — a frame entry is never split — and the remainder continues in the next message with its own sequence, so a normal diff cycle may span messages. Each message is a complete diff unit: the client applies it directly, and the baseline advances only on the messages actually written (§10.3).
-- Field widths are fixed per reduction: f16 slots use the quiet-NaN pattern `0x7E00`, f32 slots use the f32 quiet NaN. The client derives each slot's width from the shared config (FR-TD-09), so no per-slot type tag is sent on the wire.
+- Field widths are fixed per reduction: f16 slots use the quiet-NaN pattern `0x7E00`, f32 slots use the f32 quiet NaN. The client derives each slot's width from the resolved manifest (§4.6, FR-TD-09), so no per-slot type tag is sent on the wire.
 
 ### 10.5 Other Messages
 
 Little-endian; each begins with a `u8 type` (direction-scoped).
 
 ```
-Dictionary (server → client, type = 1):        # in chunks, before the first frame
-  u8  dict_flags            # bit0 dictionary, bit1 dictionary_end
-  u32 entry_count           # entries in this chunk
-  Entry[entry_count]:
-    u32 node_index
-    u8  kind                # 0 = group, 1 = device
-    u16 id_len
-    u8  id[id_len]          # config id (UTF-8)
+Manifest (server → client, type = 1):          # in chunks, before the first frame
+  u8  manifest_flags        # bit0 manifest, bit1 manifest_end
+  u32 byte_count            # bytes in this chunk
+  u8  bytes[byte_count]     # consecutive bytes of the resolved manifest
 
 CameraContext (client → server, type = 1):     # every frame
   f32 position[3]
@@ -758,15 +778,15 @@ InspectionTarget (client → server, type = 2):  # on selection change
   u32 node_index            # 0 = deselection
 ```
 
-The dictionary covers **every node in the index** — `entry_count` is the total node count, ~101,781 at the full tier (≈ 2.4 MB with ~17-byte ids) — delivered in chunks cut at the 64 KB wire-message bound (§10.4), in ascending node-index order, complete before the first frame; the client accepts frames only after `dictionary_end`. It maps each node index to its kind and config id, and the client resolves positions, units, metric labels, and channel meanings from the shared config (FR-TD-09, Decision 11). The camera context is sent every frame (FR-CD-06); the inspection target only on change (FR-VS-02).
+The manifest covers **every node in the index** — ~101,781 nodes at the full tier — delivered as byte ranges of the §4.6 document — compression permitted, Decision 11 — in chunks cut at the 64 KB wire-message bound (§10.4), in file order, complete before the first frame; the client accepts frames only after `manifest_end`. It carries each node's identity, position, boxes, and resolved metric and channel fields (FR-TD-09, Decision 11): ~150 B per node and ~80 B per metric instance before compression — ~2 MB at the building tier (the client target, §11) and ~40 MB at the full tier — one-time, outside K5's steady-state window. The camera context is sent every frame (FR-CD-06); the inspection target only on change (FR-VS-02).
 
 ## 11. Browser 3D Client Design
 
 The client and demo target the building tier (~4,280 devices). Browser KPIs K6 (frame rate) and K7 (memory) are verified at that scale; the engine itself is benchmarked across all three tiers (§15).
 
-The client loads the same topology definition as the server (FR-TD-09) to map instance ids to device positions and metric units, so positions are never transmitted per reading.
+The client resolves instance ids to device positions and metric units from the resolved manifest (§4.6, FR-TD-09), so positions are never transmitted per reading.
 
-A group entry's transform comes from the same config: its position and extent are those of the group's **geometry box** — the declared `aabb` when present, otherwise the union of its children's geometry boxes and its devices' positions (FR-TD-09) — so what is drawn is what is culled. The LOD decision uses the LOD box instead (§9.2), so expansion still follows the spread of a group's devices (Decision 22). Shape and marker size are client-side rendering choices, with a minimum visible size for a degenerate box; a group's AABB is a bounding box, not a model of the object.
+A group entry's transform comes from the manifest's resolved **geometry box** (§4.6, FR-TD-09) — so what is drawn is what is culled. The LOD decision uses the LOD box instead (§9.2), so expansion still follows the spread of a group's devices (Decision 22). Shape and marker size are client-side rendering choices, with a minimum visible size for a degenerate box; a group's AABB is a bounding box, not a model of the object.
 
 ### 11.1 Rendering
 
@@ -784,7 +804,7 @@ Object picking / click-to-inspect (FR-CD-04). Primary path uses instance id hit-
 
 ### 11.4 Display Mapping
 
-Each rendered object is coloured by one selected value (FR-CD-03). The default is the object's **attention value** (a group's reserved attention channel, or a device's attention level), which gives a consistent fixed severity scale for comparing devices and groups. The viewer may instead select a metric (for a device instance) or one of the group's local channels (for a group entry); because a group's channels are local to it, these selectable values are resolved per group from the shared config. Switching is a client-only change, since every visible entry's complete value set is already streamed (§10.3). The selected object's values are shown with their units (FR-CD-05), except a `count` channel, whose tally is shown with no unit (Decision 9).
+Each rendered object is coloured by one selected value (FR-CD-03). The default is the object's **attention value** (a group's reserved attention channel, or a device's attention level), which gives a consistent fixed severity scale for comparing devices and groups. The viewer may instead select a metric (for a device instance) or one of the group's local channels (for a group entry); because a group's channels are local to it, these selectable values are resolved per group from the manifest (§4.6). Switching is a client-only change, since every visible entry's complete value set is already streamed (§10.3). The selected object's values are shown with their units (FR-CD-05), except a `count` channel, whose tally is shown with no unit (Decision 9).
 
 ## 12. Performance Budgets
 
@@ -830,7 +850,8 @@ Named budgets sum to ≤ 7.5 ms; overruns do not cascade across frames. K2 measu
 | Degradation | Flat hierarchy (all devices under the root) returns a single blended entry within budget, with exact aggregates | R5, G2 |
 | Invariant | Boot-time structural scan; declared-`aabb` containment; parent geometry ⊇ child geometry; geometry box ⊇ LOD box | R1, R3 |
 | Integration | Backend alpha / end-to-end | FR-CD-08 |
-| Transport | Wide-slot encode/decode round-trip: f32 `sum`/`count`, ε after width conversion, per-width unavailable marker, count above 65,504; dictionary chunk reassembly across the 64 KB bound | FR-TR-02, FR-TR-03, K5 |
+| Transport | Wide-slot encode/decode round-trip: f32 `sum`/`count`, ε after width conversion, per-width unavailable marker, count above 65,504; manifest chunk reassembly across the 64 KB bound | FR-TR-02, FR-TR-03, K5 |
+| Conformance | Golden manifest fixture: the engine's materialized parse of the raw topology matches an independent reference expansion — device_index, metric_slot, node order, and boxes agree | FR-TD-09 |
 | Ablation | Sibling ordering on/off (locality hypothesis) | R1 |
 | Ablation | SIMD on/off (aggregation and encode) | R2, K9 |
 | Ablation | ε suppression on/off (egress) | K5 |
@@ -1021,7 +1042,7 @@ Metric identity is the per-device instance `(device, label)`; labels are chosen 
 - **State layout.** The state is normalized to one 64-bit slot per metric instance (`value` plus the frame-clock `arrival_ms`, Decision 16), plus a per-device row pointers array (CSR) that groups a device's instances and orders them in leaf order and local-slot order. Rows are exact, so there are no unused slots.
 - **Aggregation.** At boot each channel records the sorted state offsets of its contributing metric instances; the 60 Hz pass walks those offsets within the group's contiguous block of rows. K9 (≤ 5 µs over ≤ 1,000 contributors) is met by the bounded, prefetch-friendly gather rather than by a single sequential run.
 - **Encode.** A device's whole value set is contiguous, matching the per-entry "all values" requirement (FR-TR-02, §10.3).
-- **Ingest record.** The simulator emits the engine's ingest format directly — a compact little-endian struct `device_index u32, metric_slot u16, value f32` (10 bytes), optionally followed by a `sample_timestamp u64` — with no runtime middleware: both ends derive the bindings from the shared config at boot (§7.1).
+- **Ingest record.** The simulator emits the engine's ingest format directly — a compact little-endian struct `device_index u32, metric_slot u16, value f32` (10 bytes), optionally followed by a `sample_timestamp u64` — with no runtime middleware: both ends derive the bindings from the resolved manifest at boot (§4.6, §7.1).
 - **Client.** Cross-object comparison uses the attention channel (FR-CD-03); per-metric selection is per-object by construction, so no global vocabulary is needed.
 - **Alternatives rejected.** A site-wide metric vocabulary and a global kind slot; a global metric column; a separate `quantity` concept — the engine consumes **unit**, not the label; a label-keyed ingest record — strings on the 300k EPS path, when both ends bind device ids and labels to indices at boot (§7.1).
 
@@ -1062,22 +1083,22 @@ Variable-length per-node data is held in global structure-of-arrays addressed by
 
 ### Decision 11 — Wire identity
 
-The wire key is the server's flat-array node index; the client maps it to config identities through a connect-time dictionary.
+The wire key is the server's flat-array node index; the client maps it to config identities through the connect-time manifest (§4.6).
 
 - **Per-frame.** Entries and the per-session diff are keyed by the node index (u32), as in §10.3.
-- **Dictionary.** On (re)connect the server sends the dictionary covering every node in the index, in chunks cut at the 64 KB wire-message bound (§10.4), each chunk self-describing by node index; the client accepts frames only after the end chunk. The client resolves position, units, metric labels, and channel meanings from the shared config (FR-TD-09). The dictionary is delivered once per session as one chunk sequence, re-sent on reconnect, and may be delta/compressed.
+- **Manifest.** On (re)connect the server sends the resolved manifest (§4.6) covering every node in the index, in chunks cut at the 64 KB wire-message bound (§10.4); the client accepts frames only after the end chunk. The client resolves positions, units, metric labels, and channel meanings from it (FR-TD-09). The manifest is delivered once per session as one chunk sequence, re-sent on reconnect, and may be delta/compressed.
 - **Client selection.** The client keys rendered instances by node index, so the inspection target (FR-VS-02) is sent as the node index.
-- **Restart / edit.** Indices are per-build; the topology is fixed while serving, so indices are stable within a session, and a fresh dictionary is sent across a restart or a config edit.
-- **Alternatives rejected.** Cross-restart index stability and a client index cache — a fresh dictionary is sent instead, and no cache survives a reconnect.
+- **Restart / edit.** Indices are per-build; the topology is fixed while serving, so indices are stable within a session, and a fresh manifest is sent across a restart or a config edit.
+- **Alternatives rejected.** Cross-restart index stability and a client index cache — a fresh manifest is sent instead, and no cache survives a reconnect.
 
 ### Decision 12 — Hierarchy build details
 
-The hierarchy build is a single sequential pass over the resolved config, and validation runs fail-fast in seven stages before serving.
+The hierarchy build is a single sequential pass over the resolved manifest (§4.6), and validation runs fail-fast in seven stages before serving.
 
 - **Leaf AABB.** A leaf's AABB is the device position (degenerate point); frustum tests are inclusive, and the brute-force reference uses the identical point test. There is no AABB inflation. A leaf's projected height is degenerate, which is harmless: a device leaf is terminal by kind, and the size threshold only decides group blending.
 - **Positions.** Non-finite positions (NaN/Inf) are rejected at boot; coincident positions are legal and separated by the node-id tie-break.
-- **Build parallelism.** The layout DFS is sequential — O(N) and not the K8 bottleneck. K8 is treated as a config-parse and validation budget.
-- **Validation.** Checks run on the resolved config in seven stages — schema (FR-TD-08), structural (FR-TD-07), device/metric (FR-TD-04), channels (FR-TD-05), contributions (FR-TD-06/08), limits/absence (FR-TD-11/08), post-build invariants (§6.2) — and are fail-fast: the first fault aborts boot with a structured diagnostic `{code, node id, metric label / channel id, message}`.
+- **Build parallelism.** The layout DFS is sequential — O(N) and not the K8 bottleneck. K8 is treated as a parse, materialization, and validation budget.
+- **Validation.** Checks run across the raw topology and its manifest in seven stages — schema (FR-TD-08), structural (FR-TD-07), device/metric (FR-TD-04), channels (FR-TD-05), contributions (FR-TD-06/08), limits/absence (FR-TD-11/08), post-build invariants (§6.2) — and are fail-fast: the first fault aborts boot with a structured diagnostic `{code, node id, metric label / channel id, message}`.
 - **Alternatives rejected.** A parallel layout DFS — the sequential walk is O(N) and not the K8 bottleneck; a pre-emptive streaming parse — parsing is optimised only if measurement demands it.
 
 ### Decision 13 — Benchmark host, topology, and simulator configuration
@@ -1171,9 +1192,9 @@ A group may declare an `aabb` — two corner points that contain every device po
 - **Why two boxes.** Geometry governs culling and rendering, so the drawn marker and the culled box are the same box and markers do not pop at frustum edges. LOD governs expansion, which follows the spread of a group's devices: that is what FR-VS-05 measures (`too small on screen to show its individual devices`) and what FR-VS-07's largest-on-screen ranking spends the entry budget on.
 - **Validation.** The field is optional, so a topology that declares none boots unchanged. When present, a boot check places every descendant device position and every descendant declared `aabb` inside it, which makes culling on that box incapable of hiding an in-view device or an in-view descendant extent (FR-TD-07, §6.2).
 - **Geometry is never templated.** `aabb` and `position` are declared on the node itself — absolute coordinates hold only for that instance, the same reason template-provided positions were rejected (Decision 20).
-- **Cost.** One extra box per index node (6 × f32 ≈ 2.4 MB at 100k, boot-time and immutable), an O(nodes) containment check, and no wire change: the client derives the geometry box from the shared config (FR-TD-09, §11).
+- **Cost.** One extra box per index node (6 × f32 ≈ 2.4 MB at 100k, boot-time and immutable), an O(nodes) containment check, and no per-frame wire change: both boxes ship once in the resolved manifest (§4.6, FR-TD-09, §11).
 - **Pruning unchanged.** A declared `aabb` exempts nothing from Decision 21: a group with no devices has no values to stream. Its box still joins every ancestor's derived geometry box — a device-less room remains part of its floor's extent — while it enters no index and draws nothing itself.
-- **Alternatives rejected.** Deriving the geometry box from device positions only — a descendant's declared extent then escapes an ancestor's frustum test, so a subtree prune can hide an in-view drawn box; a single box (declared alone, or declared unioned with derived) — it moves the LOD decision onto empty volume, so an empty cabinet outranks a dense sensor cluster in FR-VS-07's ranking and expands groups whose devices stay indistinguishable; declared extents in the group library — absolute geometry cannot be shared by instances at different locations; sending boxes on the wire — the client already holds the config, and +24 B per node would double the dictionary (§10.5) or add ~117 KB per frame against K5.
+- **Alternatives rejected.** Deriving the geometry box from device positions only — a descendant's declared extent then escapes an ancestor's frustum test, so a subtree prune can hide an in-view drawn box; a single box (declared alone, or declared unioned with derived) — it moves the LOD decision onto empty volume, so an empty cabinet outranks a dense sensor cluster in FR-VS-07's ranking and expands groups whose devices stay indistinguishable; declared extents in the group library — absolute geometry cannot be shared by instances at different locations; carrying boxes per frame — boxes are immutable, so they ship once in the resolved manifest instead (§4.6): both boxes on the ~1,781 groups ≈ 86 KB at 100k, against ~117 KB per frame at the entry budget (K5).
 
 ### Decision 23 — Simulator operating parameters
 

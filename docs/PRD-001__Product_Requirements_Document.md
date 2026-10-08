@@ -4,9 +4,9 @@
 | --- | --- |
 | Document ID | PRD-001 |
 | Title | Server-Side Hierarchical Spatial Filtering Engine for 3D Digital Twin Visualization |
-| Version | 0.4.0 |
+| Version | 0.5.0 |
 | Status | Draft |
-| Last Updated | 2026-09-28 |
+| Last Updated | 2026-10-08 |
 | Owner | Project maintainer |
 | Related documents | Downstream: TDD-001 (Technical Design), PLN-001 (Master Execution Sequence). This document is self-contained. |
 
@@ -78,7 +78,7 @@ All three personas belong to the **project**: the Operator reaches the product t
              └─ selected object id, on selection change ─► server
 ```
 
-Each browser sends its camera pose (position and orientation) and screen geometry to the server every frame, and the identity of its selected object on selection change, closing the feedback loop that drives server-side visibility selection, blending, and targeted inspection (FR-VS-01, FR-VS-02, FR-CD-04, FR-CD-06). The simulator, the engine, and the client all load the same topology definition, so device and metric identities, positions, units, and thresholds align (FR-TD-09).
+Each browser sends its camera pose (position and orientation) and screen geometry to the server every frame, and the identity of its selected object on selection change, closing the feedback loop that drives server-side visibility selection, blending, and targeted inspection (FR-VS-01, FR-VS-02, FR-CD-04, FR-CD-06). The engine parses the topology definition once and materializes it into a resolved manifest that the engine, the simulator, and the client all consume, so device and metric identities, positions, units, and thresholds align (FR-TD-09).
 
 The benchmark harness, the fixed benchmark topology, and the benchmark report complete the deliverables (see §13).
 
@@ -100,7 +100,7 @@ Priority: **M** = must have, **S** = should have.
 | FR-TD-06 | Each group's aggregate channels shall reflect exactly the contributions configured for it; a group contributes its configured channels to its parent only where configured, while its attention always propagates to its parent (FR-AG-06). Channel contributions shall join only a channel of the same reduction. | M | G3 |
 | FR-TD-07 | The system shall validate the topology at boot as a single-rooted, acyclic tree in which every node has a topology-unique identity and every device is a reachable leaf. Groups may be empty. It shall refuse to serve on structural errors and report the fault with enough detail to locate it. | M | G5, R1, R9 |
 | FR-TD-08 | The system shall validate the topology and its configuration at boot and refuse to serve on violation, reporting the fault with enough detail to locate it. The validation conditions are listed below. | M | G5, R1, R9 |
-| FR-TD-09 | The topology definition shall be the single source shared by the simulator, the engine, and the client, so that identities are reproducible from an unchanged topology. | M | G5 |
+| FR-TD-09 | The topology definition shall be the single source shared by the simulator, the engine, and the client — directly or through the engine's resolved manifest — so that identities are reproducible from an unchanged topology. | M | G5 |
 | FR-TD-10 | The system shall serve per-viewer visibility queries and compute per-group aggregates, becoming ready to serve within the boot-time budget (K8) and meeting the per-frame latency budgets (K2, K9). | M | G2, G3, K2, K9 |
 | FR-TD-11 | The topology shall allow severity limits to be assigned to metrics and channels, mapping a value that reaches or exceeds a high limit, or reaches or falls below a low limit, to a severity level on the fixed severity scale (FR-AG-06); a value's level is the greatest level among its fired limits. An absence severity level may be assigned to each metric for use while that metric is unavailable; a metric without an assigned absence level is treated as normal. Limits inherit the unit of the value they bound. | M | G2, G3 |
 
@@ -230,7 +230,7 @@ The engine's byte-level representation of the same values, including exact wire 
 
 | Interface | Direction | Content |
 | --- | --- | --- |
-| Topology config | file → simulator / engine / client | Site hierarchy, device positions, per-device metric labels and per-metric units, noise thresholds, freshness timeouts, and the containing group's channels each metric contributes to; per-group aggregate channel definitions and per-group channel contributions; per-metric and per-channel severity limits and per-metric absence severity levels. Every group has an attention value, which is not configurable. |
+| Topology config | file → engine; engine → resolved manifest → engine / simulator / client | Site hierarchy, device positions, per-device metric labels and per-metric units, noise thresholds, freshness timeouts, and the containing group's channels each metric contributes to; per-group aggregate channel definitions and per-group channel contributions; per-metric and per-channel severity limits and per-metric absence severity levels. Every group has an attention value, which is not configurable. The engine materializes this interface into a resolved manifest — every node fully expanded, with metric and channel settings applied — which is the form all three parties consume; identities remain reproducible from an unchanged topology (FR-TD-09). |
 | Engine configuration | file → engine | Visibility/LOD parameters: on-screen-size enter/exit thresholds (FR-VS-06) and camera-context timeout (FR-VS-08). |
 | Simulator configuration | file → simulator | Reading rates per tier (FR-BR-05); value models covering noise, steps, spikes, and offline transitions, and the parameters that make traces deterministic (FR-CD-07, FR-BR-04). |
 | Telemetry ingest | simulator / devices → engine | Device identity and metric values at the configured rate. |
