@@ -35,11 +35,11 @@ Activities A11 (simulator) and A12–A13 (transport) interleave: the simulator i
 | Component | Activities | Deliverable | Design reference |
 | --- | --- | --- | --- |
 | Research | A1 | Prior-art & reference review | — |
-| Architecture | A2–A4 | Config schema, protocol spec, architecture spec | TDD-001 §4, §9 |
-| Engine | A5–A10 | Working engine, semantic hierarchy index, backend alpha | TDD-001 §5–§8 |
-| Transport | A12–A13 | WS transport, quantised delta pipeline | TDD-001 §9 |
-| Benchmark | A11, A14–A16 | Simulator, baseline KPIs, scaling envelope, report draft | TDD-001 §13–§14 |
-| Browser 3D client | A17–A20 | Browser 3D client, end-to-end demo, working prototype | TDD-001 §10 |
+| Architecture | A2–A4 | Config schema, protocol spec, architecture spec | TDD-001 §4, §10 |
+| Engine | A5–A10 | Working engine, semantic hierarchy index, backend alpha | TDD-001 §6–§9 |
+| Transport | A12–A13 | WS transport, quantised delta pipeline | TDD-001 §10 |
+| Benchmark | A11, A14–A16 | Simulator, baseline KPIs, scaling envelope, report draft | TDD-001 §14–§15 |
+| Browser 3D client | A17–A20 | Browser 3D client, end-to-end demo, working prototype | TDD-001 §11 |
 | Docs & Launch | A21–A25 | Documentation set, demo video, v1.0 release | — |
 
 ## 4. Milestone Gates
