@@ -458,9 +458,9 @@ The **state table** is separate from the index and laid out **device-major in co
 
 **Value slots.** The device and group baselines each use their region's own index space, whose local order matches the wire's per-entry slots (§10.4): a device metric sits at its state-table slot (the leaf's `row base` plus its local slot), and a group channel at its accumulator lane (the group's `row base` plus its local channel). The layout is fixed at boot, so every session allocates arrays of the same shape.
 
-**The current epoch.** The stamps come from one `u32` **frame number** held in the session's state beside these arrays: it starts at 0, each diff reads the stamps to classify entries, and each write commit advances the number by one and stamps the visible nodes' cells with it — so `0` remains the mark of a never-visible node (§10.3). The number wraps once every ~828 days of continuous writes at 60 Hz; for one write the visible stamps and the never-visible mark are both `0`, until the next write re-stamps the visible cells, and any stamp other than the current number marks a gap and takes the appeared path — so a wrap costs one frame of resend, and removal scans the previous-frame list, not the stamps (§10.3).
+**The current epoch.** The stamps come from one `u32` **frame number** held in the session's state beside these arrays: it starts at 0, each diff reads the stamps to classify entries, and each write commit advances the number by one and stamps the visible nodes' cells with it — so `0` remains the mark of a never-visible node (§10.3). The number wraps once every ~828 days of continuous writes at 60 Hz; for one write the visible stamps and the never-visible mark are both `0`, so a node first seen in that interval reads as continuous and its appeared send waits one write. Any stamp other than the current number marks a gap and takes the appeared path, and removal scans the previous-frame list, not the stamps (§10.3).
 
-**Sizes.** The five arrays take ~1.2 MB per viewer at 100k: the device baseline covers ~300k device-metric slots at 2 B (~600 KB), the group baseline covers the ~28k group-channel slots at 4 B (~114 KB), the epochs are 100k at 4 B (~400 KB), the attention baseline is 100k at 1 B (~100 KB), and the previous-frame list adds ≤ B entries at 4 B.
+**Sizes.** The five arrays take ~1.2 MB per viewer at 100k: the device baseline covers ~300k device-metric slots at 2 B (~600 KB), the group baseline covers the ~28k group-channel slots at 4 B (~114 KB), the epochs are ~102k at 4 B (~407 KB), the attention baseline is ~102k at 1 B (~102 KB), and the previous-frame list adds ≤ B entries at 4 B.
 
 ## 6. Hierarchical Spatial Index
 
@@ -490,7 +490,7 @@ A leaf's AABB is the device position (a degenerate point); frustum tests are inc
 | Parent-first ordering | Index ordering scan | Abort boot |
 | Skip-offset correctness | Recompute vs stored size | Abort boot |
 | Child enumeration consistency | `child_count` equals emitted direct children; `first_child = index + 1` | Abort boot |
-| Per-device state-row integrity | Row-offset monotonicity; row `d` aligned to leaf-order device `d`; total = Σ metrics/device | Abort boot |
+| Per-device state-row integrity | Row-pointer monotonicity; row `d` aligned to leaf-order device `d`; total = Σ metrics/device | Abort boot |
 | Contribution unit and reduction consistency | Each contributor's declared unit matches the channel's unit; each contributing channel's reduction matches the receiving channel's | Abort boot |
 | Contribution wiring existence | Every device's `contributes_to` key names one of its metrics and each target a channel in its containing group; every group's `contributes_to` key names one of its own channels and each target a channel in its parent | Abort boot |
 | Metric policy key existence | Every device type entry's `policy` covers exactly its `metrics` labels, each carrying `epsilon` and `freshness_ms`; every device node's `policy` key names one of its metrics | Abort boot |
