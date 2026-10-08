@@ -4,7 +4,7 @@
 | --- | --- |
 | Document ID | TDD-001 |
 | Title | Server-Side Hierarchical Spatial Filtering Engine — Technical Design |
-| Version | 0.17.0 |
+| Version | 0.18.0 |
 | Status | Draft |
 | Last Updated | 2026-10-08 |
 | Owner | Project maintainer |
@@ -379,7 +379,7 @@ The manifest is a flat JSON array **in index order — array position is the nod
 | `policy` | devices and groups (when authored) | map | as authored, beside the merged settings |
 | `contributes_to` | devices and groups (when authored) | map | as authored; the build resolves it against the resolved `metrics` and `channels` to record contribution sources (§6.1) |
 
-**Invariants.** Entries are in canonical preorder, so parents precede children, subtrees are contiguous, and a device's position among device entries is its `device_index` (leaf order — §5.3, §7.1). Only nodes present in the index appear: groups with no device descendant are excluded, their extents already folded into their ancestors' boxes (FR-TD-09, Decision 21). Serialization is byte-stable — fixed key order and float format — so an unchanged topology yields a byte-identical manifest, which makes a checked-in manifest the golden conformance fixture, regenerated and cross-checked by an independent reference expansion (§14).
+**Invariants.** Entries are in canonical preorder, so parents precede children, subtrees are contiguous, and a device's position among device entries is its `device_index` (leaf order — §5.3, §7.1). Only nodes present in the index appear: groups with no device descendant are excluded, their extents already folded into their ancestors' boxes (FR-TD-09, Decision 21). The manifest's boxes arrive satisfying the §6.2 box scan — parent geometry ⊇ child geometry and geometry box ⊇ LOD box. Serialization is byte-stable — fixed key order and float format — so an unchanged topology yields a byte-identical manifest, which makes a checked-in manifest the golden conformance fixture, regenerated and cross-checked by an independent reference expansion (§14).
 
 ## 5. Memory Layout
 
@@ -494,11 +494,11 @@ The topology (nodes and parent-child edges) is fixed by the resolved manifest (�
 
 **Derived layout.** One canonical order fixes every derived fact:
 
-1. **Numbering and shape.** Nodes fill one flat, parent-first array numbered `id = position` in preorder over children in declared list order: parents precede children, each subtree is contiguous, and each node records its kind (leaf device / internal group), its channel definitions, and — for a leaf — its state offset (Decision 8).
-2. **Boxes.** A group's **LOD box** is the union of its children's LOD boxes (a leaf's box is its device position), and its **geometry box** is the declared `aabb` when present, else the union of its children's geometry boxes — device-less children included (Decision 22); both boxes are derived at materialization and carried in the manifest (§4.6). `subtree_size` counts the subtree's nodes and `child_count` the direct children. The unions make the layout **order-invariant**: sibling order cannot tighten a bound or improve pruning, so no spatial construction (median split, SAH, or BVH build) is performed and pruning quality is inherited from the config's containment structure.
-3. **Leaf order and aggregation layout.** Leaf order is the device DFS order, the state table's device dimension (§5); retained groups hold their accumulator lane range in bottom-up order — a group's `row base` is its lane start, length `channel_count` (§5). Each group records its contribution sources (per local channel, the metric instances and child channels that feed it, validated for same unit and same reduction), including each channel's seed list (the sorted contributing state offsets) and merge list (the contributing channels' accumulator lanes) for the aggregation pass (§5, §8).
+1. **Numbering and shape.** Nodes fill one flat, parent-first array numbered by array position (the node index, Decision 11) in preorder over children in declared list order (Decision 8): parents precede children, each subtree is contiguous, and each node records its kind (leaf device / internal group), its channel slice `(channel_base, channel_count)` into the global channel-def array, and its kind-dependent `row base` (§5.2 — state-table row for a leaf, accumulator lane for a group).
+2. **Boxes.** A group's **LOD box** is the union of its devices' positions (equivalently, the union of its children's LOD boxes — a leaf's box is its device position), and its **geometry box** is the declared `aabb` when present, else the union of its children's geometry boxes — device-less children included (Decision 22); both boxes are derived at materialization and carried in the manifest (§4.6). `subtree_size` counts the subtree's nodes and `child_count` the direct children. The unions make the layout **order-invariant**: sibling order cannot tighten a bound or improve pruning, so no spatial construction (median split, SAH, or BVH build) is performed and pruning quality is inherited from the config's containment structure.
+3. **Leaf order and aggregation layout.** Leaf order is the device DFS order, the state table's device dimension (§5); retained groups hold their accumulator lane range — a group's `row base` is its lane start, length `channel_count` (§5). Each group records its contribution sources (per local channel, the metric instances and child channels that feed it, validated for same unit and same reduction), including each channel's seed list (the sorted contributing state offsets) and merge list (the contributing channels' accumulator lanes) for the aggregation pass (§5, §8).
 4. **Bindings.** Each device's metric labels bind to per-device slots (`metric_label → metric_slot`).
-5. **Exclusions.** Groups with no device descendant are excluded from the index, decided bottom-up after device placement, so a retained group's LOD box is always the union of a non-empty set; merge sources whose child group is excluded are dropped at build — the child channel is valueless by construction (FR-AG-04) — so every contribution source corresponds to a recorded channel definition (Decision 21).
+5. **Exclusions.** Groups with no device descendant are excluded from the index — decided at materialization, bottom-up after device placement — so a retained group's LOD box is always the union of a non-empty set; contribution wiring from an excluded child group never enters the manifest — the child channel is valueless by construction (FR-AG-04) — so every contribution source the build records corresponds to a recorded channel definition (Decision 21).
 
 **Derivation.** Materialization (§4.6) resolves and orders the nodes and derives both boxes; one sequential pass over the manifest then derives every layout fact it does not carry — the numbering and boxes arrive with it — while validating the tree (single root, acyclic, devices reachable) (Decision 12). A leaf's AABB is the device position (a degenerate point); frustum tests are inclusive and the brute-force reference uses the identical point test (Decision 12).
 
@@ -506,17 +506,19 @@ The topology (nodes and parent-child edges) is fixed by the resolved manifest (�
 
 | Invariant | Check | Failure response |
 | --- | --- | --- |
-| Contiguous subtrees | Offset/size scan | Abort boot with diagnostics |
+| Contiguous subtrees | Offset/size scan | Abort boot |
 | Parent-first ordering | Index ordering scan | Abort boot |
 | Skip-offset correctness | Recompute vs stored size | Abort boot |
 | Child enumeration consistency | `child_count` equals emitted direct children; `first_child = index + 1` | Abort boot |
+| Exclusion completeness | every manifest group has ≥1 descendant device, and every device and device-bearing group of the raw topology appears in the manifest | Abort boot |
 | Per-device state-row integrity | Row-pointer monotonicity; row `d` aligned to leaf-order device `d`; total = Σ metrics/device | Abort boot |
 | Contribution unit and reduction consistency | Each contributor's declared unit matches the channel's unit; each contributing channel's reduction matches the receiving channel's | Abort boot |
 | Contribution wiring existence | Every device's `contributes_to` key names one of its metrics and each target a channel in its containing group; every group's `contributes_to` key names one of its own channels and each target a channel in its parent | Abort boot |
 | Metric policy key existence | Every device type entry's `policy` covers exactly its `metrics` labels, each carrying `epsilon` and `freshness_ms`; every device node's `policy` key names one of its metrics | Abort boot |
 | Channel policy key existence | Wherever channels are declared, the companion `policy` covers exactly those ids with `epsilon`; a refining group node's `policy` names only existing channels | Abort boot |
 | Finite positions | Every device position is finite | Abort boot |
-| Device containment | Every declared group `aabb` contains all of its descendant device positions and every descendant declared `aabb` | Abort boot |
+| Device containment | Every declared group `aabb` contains all of its descendant device positions and every descendant declared `aabb` (stage 2, raw topology, `E-STRUCT`) | Abort boot |
+| Box consistency | parent geometry ⊇ child geometry; geometry box ⊇ LOD box; every derived geometry box contains all of its descendant device positions and every descendant declared `aabb` — excluded groups included (post-build scan over the raw topology and the manifest, `E-INVARIANT`) | Abort boot |
 | Metric-count ceiling | Each device's configured metrics ≤ 15,000, so a complete value set (slot mask plus f16 values, ≈31 KB) stays within half a 64 KB message | Abort boot |
 | Epsilon and freshness | Every metric and channel ε is finite and ≥ 0; every `freshness_ms` is an integer ≥ 18 and ≤ 86,400,000 (24 h) | Abort boot |
 | Group channel-count bound | Each group's configured channels ≤ 16 | Abort boot |
@@ -524,21 +526,13 @@ The topology (nodes and parent-child edges) is fixed by the resolved manifest (�
 
 Unit and reduction scans apply to configured channels and their contributions; the reserved attention channel is excluded (it combines only unitless levels).
 
-**Validation order and diagnostics.** Checks run on the raw topology and its manifest (§4, §4.6) in stages: (1) schema — unknown and kind-inapplicable fields, and mutually exclusive declarations such as a group node carrying both `type` and `channels` (FR-TD-08, Decision 20), (2) structural (FR-TD-07), (3) device/metric (FR-TD-04), (4) channels (FR-TD-05), (5) contributions (FR-TD-06/08), (6) limits/absence (FR-TD-11/08), then (7) the post-build invariants above. Validation is **fail-fast**: the first fault aborts boot with a structured diagnostic — `{code, node id, metric label / channel id, message}` — precise enough to locate the fault (FR-TD-07, Decision 12). Codes are stable and prefixed by stage (`E-SCHEMA`, `E-STRUCT`, `E-METRIC`, `E-CHANNEL`, `E-CONTRIB`, `E-LIMIT`, `E-INVARIANT`).
+**Validation order and diagnostics.** Checks run on the raw topology and its manifest (§4, §4.6) in stages: (1) schema — unknown and kind-inapplicable fields, and mutually exclusive declarations such as a group node carrying both `type` and `channels` (FR-TD-08, Decision 20), (2) structural (FR-TD-07), (3) device/metric (FR-TD-04), (4) channels (FR-TD-05), (5) contributions (FR-TD-06/08), (6) limits/absence (FR-TD-11/08), then (7) the post-build rows of the table above (contiguous subtrees, parent-first ordering, skip-offset correctness, child enumeration consistency, exclusion completeness, per-device state-row integrity, and box consistency) run under `E-INVARIANT`; the configuration rows run with the stages named above, and the aggregate row runs in tests. Validation is **fail-fast**: the first fault aborts boot with a structured diagnostic — `{code, node id, metric label / channel id, message}` — precise enough to locate the fault (FR-TD-07, Decision 12). Codes are stable and prefixed by stage (`E-SCHEMA`, `E-STRUCT`, `E-METRIC`, `E-CHANNEL`, `E-CONTRIB`, `E-LIMIT`, `E-INVARIANT`).
 
 ### 6.3 Correctness Oracle
 
-Correctness is established against an **independent brute-force reference**, not a third-party spatial structure. The reference operates on the **flat device list directly** — it does not walk the index tree, so it does not share any traversal or pruning defect it is meant to catch. For the same `(topology, state, camera, selection)` it frustum-tests every device position (using the same inclusive point test as the engine, Decision 12), computes the ranked cut, and reduces the same readings; the engine's traversal agrees on the visible device-leaf set and its selection matches the reference cut. This mirrors the brute-force scalar reference used for aggregation (§8, §14), giving one independent reference per subsystem (R1).
+Correctness is established against an **independent brute-force reference**, not a third-party spatial structure. The reference operates on the **flat device list directly** — it does not walk the index tree, so it does not share any traversal or pruning defect it is meant to catch. For the same `(topology, state, camera, selection)` it frustum-tests every device position (using the same inclusive point test as the engine, Decision 12), computes the ranked cut from its own LOD boxes — unions of the flat list's device positions — and reduces the same readings. **Three outcomes are compared, each from the same cold expansion state, so the size and budget bands (§9.3) start equal on both sides:** the visible device-leaf set (culling), the ranked cut (ranking, entry budget, and expansion), and each cut entry's channel values (aggregation). This mirrors the brute-force scalar reference used for aggregation (§8, §14), giving one independent reference per subsystem (R1; K4 for the aggregation reference).
 
-The semantic n-ary tree has no shared basis with a binary spatial BVH, so the `bvh` crate is not used. Structural invariants (§6.2) cover the layout; the reference covers traversal and selection.
-
-### 6.4 Traversal
-
-- Descend the tree with frustum tests on geometry boxes.
-- **Prune** a subtree when it is outside the frustum or when the group projects below the on-screen-size threshold (skip-offset pruning).
-- **Emit** a group's aggregate channel values when it is visible but too small to be shown as individual devices.
-- **Expand** to individual devices when the group is large enough on screen and budget remains.
-- Keep a **scalar reference path** always available; any optimised path ships behind the same interface and behind the SIMD feature flag (R2, Decision 14). SIMD is applied to aggregation and encoding (§8, §10.2), not to the irregular, early-out-dominated traversal.
+The semantic n-ary tree has no shared basis with a binary spatial BVH, so the `bvh` crate is not used. The oracle verifies **behavior over a correct structure** (§9): structural invariants (§6.2) cover the layout, the configuration stages (§4, §6.2) cover validity, frame-to-frame behavior the input tuple cannot express — ingest across frames N and N+1 and the size and budget hysteresis bands — is tested in §14, manifest conformance in §14, and performance in §15. Both sides run on sampled queries, so a defect that never manifests on a sampled tuple is out of the oracle's reach by construction; randomised fixtures (§14) broaden the sample.
 
 ## 7. State Management and Ingestion
 
@@ -646,7 +640,7 @@ The frontier (the current cut) is held in a **max-heap keyed on exact projected 
 
 A child's LOD box is contained by its parent's LOD box, so projected height is **monotone** down the tree: a child is never taller on screen than its parent. Geometry boxes likewise nest — each group's contains its children's — and take no part in this ordering. The frontier therefore always holds an upper bound for every unexplored subtree, the maximum-height pop cannot miss the largest remaining node, and no node is revisited.
 
-Each entry carries its kind, its identity — the flat-array node index, resolved to a config identity through the connect-time manifest (§10.3, Decision 11) — and a **transition flag** (appeared, removed, or expanded) relative to the viewer's previous frame; `expanded` is internal to visibility and surfaces on the wire as appeared entries for the newly revealed devices (§9.3, §10.4). Values are not resolved by the query: the encoder maps each index to its source at encode time (§10.3). The result is deterministic given `(topology, state, camera, selection)`, with `entries ≤ B`; the per-viewer frontier is bounded by `B`. The viewer's selected object (FR-VS-02) is force-included every frame, adding at most one entry beyond the cut.
+Each entry carries its kind, its identity — the flat-array node index, resolved to a config identity through the connect-time manifest (§10.3, Decision 11) — and a **transition flag** (appeared, removed, or expanded) relative to the viewer's previous frame; `expanded` is internal to visibility and surfaces on the wire as appeared entries for the newly revealed devices (§9.3, §10.4). Values are not resolved by the query: the encoder maps each index to its source at encode time (§10.3). The result is deterministic given `(topology, state, camera, selection)` and the viewer's prior expansion state (§9.3), with `entries ≤ B`; the per-viewer frontier is bounded by `B`. The viewer's selected object (FR-VS-02) is force-included every frame, adding at most one entry beyond the cut.
 
 ### 9.3 Anti-Flicker
 
@@ -846,6 +840,7 @@ Named budgets sum to ≤ 7.5 ms; overruns do not cascade across frames. K2 measu
 | Attention | Limit-band mapping and absence levels vs a scalar reference; max-propagation property tests | FR-TD-11, FR-AG-06 |
 | Differential | Engine traversal/selection vs flat-list brute-force reference | R1 |
 | Selection | Exact-height heap refinement vs brute-force ranked cut | R5, K3, FR-VS-07 |
+| Hysteresis | Camera path across frames N and N+1: the enter/exit bands hold — no flicker between blended and detailed at the threshold; the budget band absorbs edge flips | FR-VS-06, R7 |
 | Boundary | Empty and device-less groups (accepted, pruned from the visible set, parents report the remaining contributions per FR-AG-04); degenerate groups (single device, coincident devices) expand with their parent; non-multiple-of-8 counts | R2 |
 | Degradation | Flat hierarchy (all devices under the root) returns a single blended entry within budget, with exact aggregates | R5, G2 |
 | Invariant | Boot-time structural scan; declared-`aabb` containment; parent geometry ⊇ child geometry; geometry box ⊇ LOD box | R1, R3 |
@@ -857,6 +852,8 @@ Named budgets sum to ≤ 7.5 ms; overruns do not cascade across frames. K2 measu
 | Ablation | ε suppression on/off (egress) | K5 |
 
 Aggregation is validated against a **brute-force scalar reference** and matches exactly on all fixtures (K4); both use the same blocked-lane order (Decision 14).
+
+Keep a **scalar reference path** always available; any optimised path ships behind the same interface and behind the SIMD feature flag (R2, Decision 14). SIMD is applied to aggregation and encoding (§8, §10.2), not to the irregular, early-out-dominated traversal.
 
 ## 15. Benchmark Methodology
 
@@ -949,10 +946,10 @@ Each decision states its decision in the first sentence, gives labelled aspects 
 | 8 | Canonical child order and child enumeration | §4, §5, §6.1, §6.2, §9.2 |
 | 9 | Config schema: JSON flat node list, explicit fields, shallow templates | §2, §4, §6.1, §8.1, §11, §15.2 |
 | 10 | Index layout for channel definitions and contributions; aggregation direction | §3.2, §5, §8 |
-| 11 | Wire identity | §5, §9.2, §10.3, §10.4, §10.5 |
+| 11 | Wire identity | §5, §6.1, §9.2, §10.3, §10.4, §10.5 |
 | 12 | Hierarchy build details | §2, §6.1–§6.3 |
 | 13 | Benchmark host spec, fixed benchmark topology, and simulator configuration | §15 |
-| 14 | Canonical reduction order and SIMD | §5, §6.4, §8, §10.2, §14, §15.3 |
+| 14 | Canonical reduction order and SIMD | §5, §8, §10.2, §14, §15.3 |
 | 15 | Transport encoding, keyframes, and egress | §2, §10.2–§10.4 |
 | 16 | State-table concurrency: lock-free atomics, overwrite back-pressure, freshness storage, frame clock | §2, §3.2, §5, §7 |
 | 17 | Client rendering: InstancedMesh over a pre-allocated VBO | §2, §11.1 |
@@ -1180,9 +1177,9 @@ A device references an entry in the device type library that supplies its `metri
 A group is retained in the index only if it has at least one device descendant, decided bottom-up after device placement; a retained group whose LOD box is degenerate — a single device, or coincident devices — is exempt from the size threshold and expands when its parent expands.
 
 - **Pruning.** A group with no device descendant — empty, or inherited from a type with nothing attached — is accepted (FR-TD-07) and pruned, so every retained group's LOD box is the union of a non-empty set.
-- **Contribution sources.** Merge sources whose child group is pruned are dropped at build, so every contribution source corresponds to a recorded channel definition; the pruned group's channels are valueless by construction (FR-AG-04), its accumulators are never allocated, and its attention is normal, so the parent's maximum is unchanged.
+- **Contribution sources.** Wiring from a pruned child group never enters the manifest, so every contribution source the build records corresponds to a recorded channel definition; the pruned group's channels are valueless by construction (FR-AG-04), its accumulators are never allocated, and its attention is normal, so the parent's maximum is unchanged.
 - **Degenerate sizing.** A group whose LOD box is degenerate projects to 0 px at every distance, so the size threshold would blend it forever; exempting it restores FR-CD-04's bring-into-view path, while the entry budget and the budget band (§9.3) still bound it.
-- **Sharing.** Pruning and sizing are pure functions of the config and the camera, so the engine and the brute-force reference apply identical rules (§6.3).
+- **Sharing.** Pruning and sizing are functions of the config, the camera, and the expansion state (§9.3), applied identically by the engine and the brute-force reference (§6.3).
 - **Alternatives rejected.** Nominal AABB inflation — it requires a magic extent and a matching rule in the brute-force reference, and it contradicts the no-inflation rule for leaves (Decision 12); rejecting device-less groups — FR-TD-07 requires that groups may be empty; emitting pruned groups — their LOD box is the union of an empty set and they stream no values.
 
 ### Decision 22 — Declared group extents
