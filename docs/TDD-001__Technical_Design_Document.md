@@ -4,9 +4,9 @@
 | --- | --- |
 | Document ID | TDD-001 |
 | Title | Server-Side Hierarchical Spatial Filtering Engine — Technical Design |
-| Version | 0.18.0 |
+| Version | 0.19.0 |
 | Status | Draft |
-| Last Updated | 2026-10-08 |
+| Last Updated | 2026-10-09 |
 | Owner | Project maintainer |
 | Related documents | Upstream: PRD-001 (Product Requirements). Downstream: PLN-001 (Master Execution Sequence). |
 
@@ -536,10 +536,10 @@ The semantic n-ary tree has no shared basis with a binary spatial BVH, so the `b
 
 ## 7. State Management and Ingestion
 
-- A **lock-free, latest-wins state table** indexed by `(device, metric)`, holding exactly one current value per entry. Writers (ingest) store each slot's value and frame-clock arrival stamp as one atomic word; readers (aggregation/encode) load the newest word (Decision 16).
-- The ingest path is **non-blocking** and does not queue unboundedly; back-pressure is handled by overwriting stale values rather than buffering (Decision 16).
+- A **lock-free, latest-wins state table** indexed by `(device, metric)`, holding exactly one current value per entry (FR-IS-01). Writers (ingest) store each slot's value and frame-clock arrival stamp as one atomic word; readers (aggregation/encode) load the newest word (Decision 16).
+- The ingest path is **non-blocking** and does not queue unboundedly (FR-IS-05); back-pressure is handled by overwriting stale values rather than buffering (Decision 16).
 - A record naming an unknown `device_index`, a `metric_slot` outside that device's row, or a non-finite value is rejected without altering existing state (FR-IS-02); device ids and labels are bound at boot, so no reading carries a string key (Decision 7).
-- Availability is tracked per `(device, metric)`: a metric is current while a reading for it arrived within its configured freshness timeout — checked each frame as `value is finite ∧ frame_clock.wrapping_sub(arrival_ms) < freshness_ms`, against the frame clock captured once per frame (§3.2); `freshness_ms` comes from the metric-def array (§5), and finiteness is the written test, because slot values boot-initialise to a quiet NaN and non-finite readings are rejected at ingest — and its value is treated as unavailable once stale; a stale metric does not affect the availability of the device's other metrics. A device is marked **offline** when all of its metrics are unavailable, and returns online on the next accepted reading (FR-IS-03, FR-IS-04).
+- Availability is tracked per `(device, metric)`: a metric is current while a reading for it arrived within its configured freshness timeout — checked each frame as `value is finite ∧ frame_clock.wrapping_sub(arrival_ms) < freshness_ms`, against the frame clock captured once per frame (§3.2); `freshness_ms` comes from the metric-def array (§5), and finiteness is the written test, because slot values boot-initialise to a quiet NaN and non-finite readings are rejected at ingest; a stale metric does not affect the availability of the device's other metrics. A device is marked **offline** when all of its metrics are unavailable, and returns online on the next accepted reading (FR-IS-03, FR-IS-04).
 - Each device's metrics are bound at boot to the **local channels of their containing group**. Aggregation reads the state slots of the metrics feeding each channel; a channel combines only same-unit contributions, and a contribution may join only a channel of the same reduction (FR-TD-05, FR-AG-02, FR-TD-06).
 - The state table is a dedicated array, separate from the index (leaf nodes store offsets, not values). Its device dimension matches the index leaf order and each device's metrics are contiguous within its row, so each group maps to one contiguous block of rows and a device's value set is contiguous (K9, §10.3, §5). Aggregation reads each channel's boot-recorded contributing offsets within that block.
 
