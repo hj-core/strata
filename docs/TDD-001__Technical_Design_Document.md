@@ -4,7 +4,7 @@
 | --- | --- |
 | Document ID | TDD-001 |
 | Title | Server-Side Hierarchical Spatial Filtering Engine — Technical Design |
-| Version | 0.20.0 |
+| Version | 0.21.0 |
 | Status | Draft |
 | Last Updated | 2026-10-09 |
 | Owner | Project maintainer |
@@ -521,6 +521,7 @@ The topology (nodes and parent-child edges) is fixed by the resolved manifest (�
 | Box consistency | parent geometry ⊇ child geometry; geometry box ⊇ LOD box; every derived geometry box contains all of its descendant device positions and every descendant declared `aabb` — excluded groups included (post-build scan over the raw topology and the manifest, `E-INVARIANT`) | Abort boot |
 | Metric-count ceiling | Each device's configured metrics ≤ 15,000, so a complete value set (slot mask plus f16 values, ≈31 KB) stays within half a 64 KB message | Abort boot |
 | Epsilon and freshness | Every metric and channel ε is finite and ≥ 0; every `freshness_ms` is an integer ≥ 18 and ≤ 86,400,000 (24 h) | Abort boot |
+| Limit and absence validity | Every declared `limit` has a finite `threshold`, a `side` of `high` or `low`, and a `level` on the fixed severity scale; every `absence` on that scale | Abort boot |
 | Group channel-count bound | Each group's configured channels ≤ 16 | Abort boot |
 | Aggregate correctness | Brute-force scalar comparison on fixtures | Fail test |
 
@@ -560,7 +561,7 @@ The producer's side of the ingest interface — the simulator's emission contrac
 
 Each group carries a **reserved unitless attention channel** (the group's attention value, reduction `max`), computed in the same bottom-up pass as its configured channels and streamed with the node's entry (FR-TD-11, FR-AG-06). Its value is on the fixed severity scale of `normal`, `advisory`, `warning`, and `critical`. A device's attention level is the greatest of its metrics' contributions. The scale is the fixed named scale of Decision 9 (FR-TD-11).
 
-- **Severity limits.** A metric or channel may declare a list of limits, each `(threshold, side, level)` on the high and/or low side. A value maps to a level by `level = max over limits of ( fired ? level : 0 )`, where `fired` is `value >= threshold` (high) or `value <= threshold` (low). Limits inherit the value's unit and are validated at boot (finite threshold; `side` `high`/`low`; level on the fixed severity scale).
+- **Severity limits.** A metric or channel may declare a list of limits, each `(threshold, side, level)` on the high and/or low side. A value maps to a level by `level = max over limits of ( fired ? level : 0 )`, where `fired` is `value >= threshold` (high) or `value <= threshold` (low). Limits inherit the value's unit and are validated at boot (finite threshold; `side` `high`/`low`; level on the fixed severity scale; Decision 9).
 - **Contributions.** A metric contributes its limit level when available, or its absence level when unavailable (per-metric; availability from FR-IS-03, §7). A configured channel contributes its limit level when it has a value.
 - **Composition.** A device's attention level is the max over its metrics' contributions. A group's attention channel is the max over its configured channels' limit levels, its direct devices' attention levels, and its child groups' attention channels. Unavailable values contribute no level; a node with no available values and no nonzero contribution reports normal (0).
 - **Propagation.** The attention channel merges as a `max` channel, order-free and exact, and is always contributed to its parent's attention channel, independent of the configured contributions (FR-TD-06, FR-AG-06).
