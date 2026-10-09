@@ -943,7 +943,7 @@ Each decision states its decision in the first sentence, gives labelled aspects 
 | 4 | Per-group local channels — identity and policy — with explicit contributions | §2, §3.1, §4, §5, §6.1, §7, §8 |
 | 5 | Aggregation execution: always-on 60 Hz background pass | §2, §5, §8 |
 | 6 | Attention channel (severity and absence) | §3.1, §5, §8.1, §10.2, §10.3, §15 |
-| 7 | Metric identity and state layout: device-local labels, per-device instances, device-major state | §2, §4, §5, §5.1, §6.1, §6.2, §7, §12, §10.4 |
+| 7 | Metric identity and state layout: device-local labels, per-device instances, device-major state | §2, §4, §5, §5.1, §6.1, §6.2, §7, §10.4, §12 |
 | 8 | Canonical child order and child enumeration | §4, §5, §6.1, §6.2, §9.2 |
 | 9 | Config schema: JSON flat node list, explicit fields, shallow templates | §2, §4, §6.1, §8.1, §11, §16.2 |
 | 10 | Index layout for channel definitions and contributions; aggregation direction | §3.2, §5, §8 |
