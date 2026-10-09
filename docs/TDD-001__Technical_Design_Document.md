@@ -4,7 +4,7 @@
 | --- | --- |
 | Document ID | TDD-001 |
 | Title | Server-Side Hierarchical Spatial Filtering Engine — Technical Design |
-| Version | 0.21.0 |
+| Version | 0.23.0 |
 | Status | Draft |
 | Last Updated | 2026-10-09 |
 | Owner | Project maintainer |
@@ -531,7 +531,7 @@ Unit and reduction scans apply to configured channels and their contributions; t
 
 ### 6.3 Correctness Oracle
 
-Correctness is established against an **independent brute-force reference**, not a third-party spatial structure. The reference operates on the **flat device list directly** — it does not walk the index tree, so it does not share any traversal or pruning defect it is meant to catch. For the same `(topology, state, camera, selection)` it frustum-tests every device position (using the same inclusive point test as the engine, Decision 12), computes the ranked cut from its own LOD boxes — unions of the flat list's device positions — and reduces the same readings. **Three outcomes are compared, each from the same cold expansion state, so the size and budget bands (§9.3) start equal on both sides:** the visible device-leaf set (culling), the ranked cut (ranking, entry budget, and expansion), and each cut entry's channel values (aggregation). This mirrors the brute-force scalar reference used for aggregation (§8, §15), giving one independent reference per subsystem (R1; K4 for the aggregation reference).
+Correctness is established against an **independent brute-force reference**, not a third-party spatial structure. The reference operates on the **flat device list directly** — it does not walk the index tree, so it does not share any traversal or pruning defect it is meant to catch. For the same `(topology, state, camera, selection)` it frustum-tests every device position (using the same inclusive point test as the engine, Decision 12), computes the ranked cut from its own LOD boxes — unions of the flat list's device positions — under the same frontier discipline as the engine (the §9.2 pop order, admission check, and terminal conditions), and reduces the same readings. **Three outcomes are compared, each from the same cold expansion state, so the size and budget bands (§9.3) start equal on both sides:** the visible device-leaf set (culling), the ranked cut (ranking, entry budget, and expansion), and each cut entry's channel values (aggregation). This mirrors the brute-force scalar reference used for aggregation (§8, §15), giving one independent reference per subsystem (R1; K4 for the aggregation reference).
 
 The semantic n-ary tree has no shared basis with a binary spatial BVH, so the `bvh` crate is not used. The oracle verifies **behavior over a correct structure** (§9): structural invariants (§6.2) cover the layout, the configuration stages (§4, §6.2) cover validity, frame-to-frame behavior the input tuple cannot express — ingest across frames N and N+1 and the size and budget hysteresis bands — is tested in §15, manifest conformance in §15, and performance in §16. Both sides run on sampled queries, so a defect that never manifests on a sampled tuple is out of the oracle's reach by construction; randomised fixtures (§15) broaden the sample.
 
@@ -579,21 +579,21 @@ Per viewer, per frame: camera pose (position and orientation), screen width/heig
 
 The query produces a per-viewer, per-frame **visibility result**: a bounded list of *entries*, each either a device instance or a blended group entry. It selects a **cut** through the visible hierarchy — the set of nodes that each become one entry — under the entry budget (R5, K3, FR-VS-07). Values are not resolved here; the encoder reads them from the state table and aggregate buffers (§10).
 
-The frontier (the current cut) is held in a **max-heap keyed on exact projected on-screen height**, not in a traversal stack, so selection is best-first: the largest visible node is expanded first, regardless of its depth or position in the array. The heap is a **fixed-capacity, per-viewer scratch buffer**, reused every frame and sized to the entry budget `B` (the frontier can never exceed `B`). The index (node ids, layout, AABBs) is immutable after boot (§5), so the heap carries only node references and per-frame heights; each node enters the frontier at most once per query.
+The frontier (the current cut) is held in a **max-heap keyed on exact projected on-screen height**, not in a traversal stack, so selection is best-first among frontier nodes: the largest node in the frontier is expanded first, regardless of its depth or position in the array. The heap is a **fixed-capacity, per-viewer scratch buffer**, reused every frame and sized to the entry budget `B` (the frontier can never exceed `B`). The index (node indices, layout, AABBs) is immutable after boot (§5), so the heap carries only node references and per-frame heights; each node enters the frontier at most once per query.
 
-**Projected on-screen height** is the vertical pixel extent of the node's **LOD box** — the union of its devices' positions (Decision 22): its eight corners are transformed to screen space at that box's centre depth, and the key is `max_y − min_y` in device pixels (pixel ratio applied). The engine and the brute-force reference compute the identical value, so the frontier's total order is reproducible (§6.3); the monotonicity of projected height down the tree relies on this centre-depth convention.
+**Projected on-screen height** is the vertical pixel extent of the node's **LOD box** — the union of its devices' positions (Decision 22): its eight corners are transformed to screen space at that box's centre depth, and the key is `max_y − min_y` in device pixels (pixel ratio applied). The engine and the brute-force reference compute the identical value, so the frontier's total order is reproducible (§6.3).
 
 1. Project the root; if it intersects the frustum, push it onto the frontier with its projected height.
 2. Repeat while an expandable candidate remains:
-   - Pop the node with the **greatest projected height**. Exact height is the primary key; node id is the terminal tie-break, giving a total, deterministic order.
+   - Pop the node with the **greatest projected height**. Exact height is the primary key; the node index is the terminal tie-break, giving a total, deterministic order.
    - Finalise the node as an entry when any terminal condition holds: a device leaf becomes a device instance entry; a group whose published availability bit is clear — no local channel reports a value — becomes a group entry carrying no value (FR-AG-04); a height below the applicable size threshold becomes a blended group entry (enter 120 px, or exit 100 px once expanded; §9.3); and a node whose expansion would breach the budget becomes a blended group entry. Groups with no device descendant never enter the index and are never emitted (§6.1).
    - A group whose **LOD box is degenerate** (a single device, or coincident devices) projects to 0 px at every distance, so the size threshold would blend it forever: it is exempt from the size threshold and expands when its parent expands, subject to the entry budget (Decision 21).
-   - Otherwise **expand** it: remove it; for each direct child, apply the frustum test and push only the visible children with their projected heights. Expansion is permitted only while `entries − 1 + deg(v) ≤ B` (`B` ≈ 5,000), and adds `deg(v) − 1` to `entries`, the running cut size (`finalised entries + frontier nodes`). `deg(v)` is O(1) from the node's `child_count` (§5), so a huge-fan-in node is rejected without enumerating its children.
+   - Otherwise **expand** it: remove it; for each direct child, apply the frustum test and push only the visible children with their projected heights. Expansion is admitted by an O(1) reservation — `entries − 1 + deg(v) ≤ B` (`B` ≈ 5,000) — while `entries` grows by one less than the number of visible children pushed, the running cut size (`finalised entries + frontier nodes`). `deg(v)` is O(1) from the node's `child_count` (§5), so a huge-fan-in node is rejected without enumerating its children.
 3. Halt when no expandable candidate remains; every node still held is finalised (leaves as device instances, internal nodes as summaries). The output is the union of finalised nodes.
 
-A child's LOD box is contained by its parent's LOD box, so projected height is **monotone** down the tree: a child is never taller on screen than its parent. Geometry boxes likewise nest — each group's contains its children's — and take no part in this ordering. The frontier therefore always holds an upper bound for every unexplored subtree, the maximum-height pop cannot miss the largest remaining node, and no node is revisited.
+A child's LOD box is contained by its parent's LOD box, so projected height is monotone down the tree for children at or beyond the parent's centre depth; a nearer child can project taller, so the frontier's height bound is approximate — determinism, the budget (`entries ≤ B`), and bit-exactness do not depend on it, and the greedy's detail choice carries the exception. Geometry boxes likewise nest — each group's contains its children's — and take no part in this ordering.
 
-Each entry carries its kind, its identity — the flat-array node index, resolved to a config identity through the connect-time manifest (§10.3, Decision 11) — and a **transition flag** (appeared, removed, or expanded) relative to the viewer's previous frame; `expanded` is internal to visibility and surfaces on the wire as appeared entries for the newly revealed devices (§9.3, §10.4). Values are not resolved by the query: the encoder maps each index to its source at encode time (§10.3). The result is deterministic given `(topology, state, camera, selection)` and the viewer's prior expansion state (§9.3), with `entries ≤ B`; the per-viewer frontier is bounded by `B`. The viewer's selected object (FR-VS-02) is force-included every frame, adding at most one entry beyond the cut.
+Each entry carries its kind, its identity — the flat-array node index, resolved to a config identity through the connect-time manifest (§10.3, Decision 11) — and a **transition flag** (appeared, removed, or expanded) relative to the viewer's previous frame; `expanded` is internal to visibility and surfaces on the wire as appeared entries for the newly revealed devices (§9.3, §10.4). Values are not resolved by the query: the encoder maps each index to its source at encode time (§10.3). The result is deterministic given `(topology, state, camera, selection)` and the viewer's prior expansion state (§9.3), with `entries ≤ B`; the per-viewer frontier is bounded by `B`. The viewer's selected object (FR-VS-02) is force-included every frame, taking one of the `B` entry slots.
 
 ### 9.3 Anti-Flicker
 
@@ -606,9 +606,9 @@ A group's `expanded` transition in the visibility result (§9.2) causes its newl
 ### 9.4 Latency Strategy
 
 - Explicitly do **not** rely on raw traversal of 100k nodes (≈ 3 ms cache-hot best case, exceeds budget).
-- Cost is bounded by the work actually performed: at most `B` expansions, each an `O(log B)` heap push/pop plus a projection, so total work is O(expansions · log B), not O(visible). At `B` ≈ 5,000 the log factor is small (~13 comparisons) and the ordering cost is a minor fraction of the traversal cost.
+- Cost is bounded by the work actually performed: at most `B` branching expansions plus O(depth) single-child pass-throughs, each an `O(log B)` heap push/pop plus a projection, so total work is O((B + depth)·log B), not O(visible). At `B` ≈ 5,000 the log factor is small (~13 comparisons) and the ordering cost is a minor fraction of the traversal cost.
 - Frustum testing dominates the per-expansion cost in aggregate: every direct child is tested while only visible children are pushed, and culled children typically reject on the first plane. Test the frustum before projecting so culled children skip the projection.
-- Skip-offset pruning removes whole off-frustum subtrees before they enter the frontier.
+- The per-child frustum test on geometry boxes removes whole off-frustum subtrees before they enter the frontier.
 - The per-viewer frontier is bounded by the cut size `≤ B` and held in a fixed-capacity scratch heap reused every frame.
 - Contingencies: coarse grid first pass; skip re-query for an idle camera; iterate the top ~50 groups directly.
 
@@ -618,6 +618,7 @@ Parameters that are not part of the topology (PRD-001 §8) live in an engine con
 
 | Parameter | Default | Requirement |
 | --- | --- | --- |
+| Entry budget `B` | 5,000 | FR-VS-07, K3 |
 | On-screen-size enter threshold | 120 px | FR-VS-06 |
 | On-screen-size exit threshold | 100 px | FR-VS-06 |
 | Budget hysteresis `Δ` | 10% of `B` | §9.3, Decision 19 |
@@ -964,11 +965,11 @@ Each decision states its decision in the first sentence, gives labelled aspects 
 
 ### Decision 1 — Frontier ordering
 
-The frontier is a fixed-capacity **max-heap keyed on exact projected on-screen height**, with node id as the terminal tie-break.
+The frontier is a fixed-capacity **max-heap keyed on exact projected on-screen height**, with the node index as the terminal tie-break.
 
 - **Structure.** The hierarchy is the single structure driving visibility and aggregation; the state table is a separate flat value store aligned to leaf order. A straightforward index of device positions cannot answer *both* "what is on screen?" and "what are this group's aggregate channel values?" within budget, so the index mirrors the semantic hierarchy and carries bounding volumes — one traversal yields visibility and aggregation together.
 - **Primary key.** Exact height is the primary key.
-- **Ordering function.** Ordering is a pure function of `(topology, state, camera, selection)`; node id is a terminal tie-break for equal heights only. The index is immutable after boot, so the frontier holds node references and per-frame heights.
+- **Ordering function.** Ordering is a pure function of `(topology, state, camera, selection)`; the node index is a terminal tie-break for equal heights only. The index is immutable after boot, so the frontier holds node references and per-frame heights.
 - **Bounds.** Heap operations are `O(log B)`; the frontier is bounded by `B` ≈ 5,000.
 - **Budget-edge flicker.** Handled by the entry-count hysteresis in §9.3.
 - **Alternatives rejected.** Bucketed ordering with a bucket size-error bound or a bucket-width parameter; a flat device-position index serving visibility beside a separate aggregation structure — it cannot answer both queries within budget.
