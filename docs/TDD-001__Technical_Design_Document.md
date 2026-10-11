@@ -6,7 +6,7 @@
 | Title | Server-Side Hierarchical Spatial Filtering Engine — Technical Design |
 | Version | 0.28.0 |
 | Status | Draft |
-| Last Updated | 2026-10-11 |
+| Last Updated | 2026-10-12 |
 | Owner | Project maintainer |
 | Related documents | Upstream: PRD-001 (Product Requirements). Downstream: PLN-001 (Master Execution Sequence). |
 
@@ -635,9 +635,9 @@ Parameters that are not part of the topology (PRD-001 §8) live in an engine con
 | Parameter | Default | Requirement |
 | --- | --- | --- |
 | Entry budget `B` | 5,000 | FR-VS-07, K3 |
+| Budget hysteresis `Δ` | 10% of `B` | §9.3, Decision 19 |
 | Size-threshold enter (screen-height fraction) | 10% | FR-VS-06 |
 | Size-threshold exit (screen-height fraction) | 8% | FR-VS-06 |
-| Budget hysteresis `Δ` | 10% of `B` | §9.3, Decision 19 |
 | Camera-context timeout | 1 s | FR-VS-08, Decision 19 |
 
 These are engine-level settings and do not affect node or metric identities; the topology file (§4) remains the single shared source of identities (FR-TD-09).
@@ -1177,7 +1177,7 @@ The project uses one stack throughout: Rust server-side, Three.js over WebGL in 
 
 The entry-budget hysteresis band defaults to 10% of `B`, and the camera-context timeout defaults to 1 s; both are engine configuration rather than topology (§9.5).
 
-**Implements:** PRD-001 FR-VS-08.
+**Implements:** PRD-001 FR-VS-07, FR-VS-08.
 
 - **Budget band.** The admission reservation is mode-dependent (§9.3): a group already in detail is admitted under the hard bound `entries − 1 + deg(v) ≤ B`, a group entering detail from blended under the soft bound `entries − 1 + deg(v) ≤ B − Δ`; a group in `[B − Δ, B]` keeps its mode, so the entry budget does not oscillate at its edge.
 - **Mode.** A group is expanded iff it was absent from the prior cut as an entry and a child of it is present in that cut; a group with no prior cut is blended. The mode is the only query state carried from its own prior result; the camera and the held selection are client inputs.
