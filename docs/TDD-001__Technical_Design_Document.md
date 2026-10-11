@@ -4,7 +4,7 @@
 | --- | --- |
 | Document ID | TDD-001 |
 | Title | Server-Side Hierarchical Spatial Filtering Engine — Technical Design |
-| Version | 0.27.0 |
+| Version | 0.28.0 |
 | Status | Draft |
 | Last Updated | 2026-10-11 |
 | Owner | Project maintainer |
@@ -573,7 +573,7 @@ Each group carries a **reserved unitless attention channel** (the group's attent
 
 ### 9.1 Camera Context Inputs
 
-Per viewer, per frame: camera pose (position and orientation), viewport width/height, field of view (FR-VS-01). The width and height are the viewport the scene renders into — the canvas rectangle, in CSS pixels, not the display. The pose and field of view, with the viewport aspect — `width / height` — drive culling; the field of view also sets the size threshold's per-frame conversion; width and height enter only through that aspect. The client's device pixel ratio is not part of the context: the screen-height fraction is identical in device and CSS pixels (§9.2), so it never crosses the wire, and the client's raster floor (§11) applies it where it originates. If the context is absent or late, the last known context is reused until a timeout, after which that viewer's stream is held (FR-VS-08).
+Per viewer, per frame: camera pose (position and orientation), viewport width/height, field of view (FR-VS-01). The width and height are the viewport the scene renders into — the canvas rectangle, in CSS pixels, not the display. The pose and field of view, with the viewport aspect — `width / height` — drive culling; the field of view also sets the size threshold's per-frame conversion; width and height enter only through that aspect. The client's device pixel ratio is not part of the context: the screen-height fraction is identical in device and CSS pixels (§9.2), so it never crosses the wire, and the client's raster floor (§11) applies it where it originates. Client zoom is not part of the context: a field-of-view zoom is already the published field of view, a camera-translation zoom the pose, and a viewport zoom the viewport itself, so the context carries the projection at every zoom level. A separate zoom field would carry no information the context lacks, and a zoom the engine read outside the context would break parity with the §6.3 reference, which reads the same context and no zoom input. If the context is absent or late, the last known context is reused until a timeout, after which that viewer's stream is held (FR-VS-08).
 
 **Example context.** Camera position `(0.0, 3.0, 12.0)` m, `forward (0.0, 0.0, -1.0)`, `up (0.0, 1.0, 0.0)`; viewport `2560 × 1440`; field of view `60°`.
 
