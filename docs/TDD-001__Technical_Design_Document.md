@@ -97,16 +97,16 @@ Three paths make up the pipeline: the **boot path**, which runs once before serv
 
 2. The simulator emits readings (`device_index`, `metric_slot`, `value`) to the **ingestor**, which applies latest-wins into the **state table** — stamping each accepted reading from the frame clock, from the live clock until its first advance — and discards invalid readings (§5.1, §7). Freshness and offline state follow from the state table (FR-IS-03, FR-IS-04). This path never blocks on a frame.
 
-**Frame path — once per 60 Hz cycle.** The path is paced on an absolute schedule: with ≤ 7.5 ms of stage work (§13) each frame completes inside its 16.67 ms slot and overruns do not cascade, so consecutive frame starts are at most 17 ms apart on millisecond ticks. A frame that overruns its slot does not push the deadlines after it: missed deadlines are dropped rather than queued, so one late frame widens at most one gap. The **frame clock** advances exactly once per frame, at this opening; every step below tests availability against that one value, within `freshness_ms` of its advance.
+**Frame path — once per 60 Hz cycle.** The path is paced on an absolute schedule: with ≤ 7.5 ms of stage work (§13) each frame completes inside its 16.67 ms slot and overruns do not cascade, so consecutive frame starts are at most 17 ms apart on millisecond ticks. A frame that overruns its slot does not push the deadlines after it: missed deadlines are dropped rather than queued, so one late frame widens at most one gap. The **frame clock** advances exactly once per frame, at this opening; aggregation and encode test availability against that one value, within `freshness_ms` of its advance.
 
 3. **Aggregation** reads the state table (metric values) and the index (the boot-compiled contribution plan, Decision 10) — and nothing per-viewer — then writes each group's channels and attention into the write buffer and swaps buffers to publish the frame's snapshot (§8).
 4. **Camera context** — each client sends its camera pose and viewport geometry every frame, and its selected node index on selection change; the transport passes both to the visibility engine (§10.5).
-5. **Visibility** reads the index (geometry boxes, LOD boxes, subtree sizes, child counts), the camera context from step 4, and the per-group availability bit published with step 3's snapshot — and no values — then produces that viewer's bounded entry cut of at most `B` entries (§9.2).
+5. **Visibility** reads the index (geometry boxes, LOD boxes, subtree sizes, child counts), the camera context, and the selection from step 4 — and no values — then produces that viewer's bounded entry cut of at most `B` entries (§9.2).
 6. **Encode** — per viewer, reads three inputs: the entry cut from step 5 (which entries exist), the aggregate snapshot from step 3 (a group entry's channel values), and the state table directly (a device entry's metric values via the leaf's `row base`, §5.2). It converts each value to its slot's wire width — f16, or f32 for `sum`/`count` — applies the per-value ε filter (metric ε from the metric-def array, channel ε from the channel-def array, §5), tests device-slot availability against the frame clock while a group entry's no-value channels come from the step-3 snapshot, suppresses unchanged slots against the last-sent baseline, and sends the selected object at full fidelity (§10.2, §10.3).
 7. **Transport** writes one WebSocket binary frame for that viewer (§10.4); the session baseline advances only on an actual socket write (§10.2, §10.3).
 8. **Render** — the client writes instance transforms and colours into the pre-allocated VBO and draws the `InstancedMesh` (§11.1).
 
-Steps 3 and 5 are independent branches: they share only the frame clock and the per-group availability bit published with the snapshot, and meet only at step 6. Step 5 cannot substitute for step 3's values, and step 3 does not know which entries step 5 selects.
+Steps 3 and 5 are independent branches: they share only the frame clock, and meet only at step 6. Step 5 cannot substitute for step 3's values, and step 3 does not know which entries step 5 selects.
 
 **Feedback and session paths**
 
@@ -398,7 +398,7 @@ The engine separates its memory by access pattern into four regions: the **index
 | --- | --- | --- | --- |
 | Index | **Node fields:** kind, geometry box, LOD box, child access + subtree size, channel slice `(channel_base, channel_count)`, contribution sources (per channel), row base. **Global arrays:** metric-def, channel-def, limit, seed, merge | Once at boot | Every frame: per viewer (visibility, encode); once per frame, shared (aggregation) |
 | State table | Latest value and frame-clock arrival stamp per `(device, metric)`, plus the per-device row pointers array; availability derived per pass | Continuously, at ingest | Once per frame, per group (aggregation); per viewer, per device entry (encode) |
-| Aggregate buffers | Per-group per-channel accumulators for groups retained in the index; the reserved attention channel and per-device attention level (`u8` slots); one availability bit per retained group | Once per frame | Per viewer, per frame |
+| Aggregate buffers | Per-group per-channel accumulators for groups retained in the index; the reserved attention channel and per-device attention level (`u8` slots) | Once per frame | Per viewer, per frame |
 | Session tables | Per-viewer frame epochs, device and group last-sent baselines, the attention baseline, and previous-frame node list | On socket write | Per viewer, per frame (diff and encode) |
 
 ### 5.1 Reading Model
@@ -454,19 +454,18 @@ The **state table** is separate from the index and laid out **device-major in co
 
 ### 5.4 Aggregate buffers
 
-**Arrays and types.** The aggregate buffers hold three arrays:
+**Arrays and types.** The aggregate buffers hold two arrays:
 
 | Array | Element | Type | Note |
 | --- | --- | --- | --- |
 | channel accumulators | the accumulator for the channel's reduction (`sum`, `mean`, `min`, `max`, `count`) | `[f32; 2]` | two buffers, each with one lane per retained group × local channel (≤16); lanes are fixed two-f32 slots — the second word used only for `mean` (`sum`, `count`); a lane's byte offset is 8 × its lane index |
 | attention slots | level on the fixed severity scale (`normal`, `advisory`, `warning`, `critical`) | `u8` | two buffers, each with one per index node — the group's reserved channel or the device's level |
-| availability bits | availability | `1 bit` | one per retained group; carried by the §8 snapshot publish |
 
 **Channel accumulators** are stored per group for its local channels and double-buffered: the frame reads one buffer while the sweep writes the other, then swaps (§8, Decision 5).
 
-**Addressing.** The region is node-indexed: a group's `row base` (§5.2) is its lane start in the accumulator buffer with length `channel_count`; attention holds one slot per index node; one availability bit per retained group sits at the group's node index. Both sides share one boot-fixed layout, so one set of offsets resolves either side.
+**Addressing.** The region is node-indexed: a group's `row base` (§5.2) is its lane start in the accumulator buffer with length `channel_count`; attention holds one slot per index node. Both sides share one boot-fixed layout, so one set of offsets resolves either side.
 
-**Sizes.** A group's row spans `channel_count` lanes (≤16) — at most 128 B per group — so the full tier's 1,781 retained groups hold at most 456 KB across both buffers. Attention takes one `u8` per index node (101,781 nodes at the full tier, ~100 KB per buffer) and availability one bit per retained group (~223 B), keeping the whole region under ~0.7 MB with both buffers included.
+**Sizes.** A group's row spans `channel_count` lanes (≤16) — at most 128 B per group — so the full tier's 1,781 retained groups hold at most 456 KB across both buffers. Attention takes one `u8` per index node (101,781 nodes at the full tier, ~100 KB per buffer), keeping the whole region under ~0.7 MB with both buffers included.
 
 ### 5.5 Session tables
 
@@ -552,7 +551,7 @@ The producer's side of the ingest interface — the simulator's emission contrac
 - **Same-reduction rule.** A channel may contribute only to a parent channel of the same reduction; boot validation rejects mixed-reduction contributions (FR-TD-06, FR-TD-08). With same-reduction contributions and accumulator merge, a group's value is the canonical subtree reduction, so K4's exact reference is well defined (FR-AG-01).
 - Each channel carries mergeable accumulator state in **f32** lanes (16 channels ≈ one or two 512-bit vectors, Decision 4): `mean` → `(sum, count)`, `sum` → `sum`, `min`/`max` → value, `count` → `count`. Seeds follow the same table: a seed contributes the reading's value, except in a `count` channel, where each available seed contributes `1` (FR-AG-01). A `count` accumulator is therefore exact below 16,777,216, the same bound as its wire encoding (§10.2). A group merges its children's channel accumulators; the published value is the finalised accumulator. `mean` is therefore exact over the subtree's available readings, and `count` is the total number of available contributing readings in the subtree, merged from child `count` channels by summation (FR-AG-01, K4).
 - A channel combines one unit only (FR-AG-02), and unavailable (stale or offline) readings are excluded from the accumulation; a channel with no available contribution reports no value (FR-AG-04).
-- Results are published as a consistent per-frame snapshot (double-buffered internally); viewers read the published buffer (FR-AG-03). The same publish carries one **availability bit per retained group** — set when any of its local channels reports a value — so visibility can finalise an all-unavailable group without reading values (§3.2, §9.2).
+- Results are published as a consistent per-frame snapshot (double-buffered internally); viewers read the published buffer (FR-AG-03).
 - Cost model: the shared pass is independent of viewer count; the per-viewer cost beyond it is **O(visible)**, not O(N) (R5, FR-AG-03).
 - Aggregates match a brute-force reduction of the same contributions exactly (FR-AG-01, K4). Because floating-point addition is not associative, exact agreement requires an identical type (**f32**) and a **canonical reduction order** shared by the scalar reference and any SIMD path: a **blocked-lane order with fixed `W = 8`** — source `i` accumulates into lane `i mod 8`, and the eight lanes fold in a fixed order (Decision 14). The scalar engine and the brute-force reference implement it identically, so they are bit-exact; a SIMD kernel reproduces the same lane pattern. `min`, `max` and `count` are order-free. A channel's reduction over up to 1,000 contributing readings targets ≤ 5 µs scalar (K9); the SIMD path aims for ≤ 1 µs as an engineering goal.
 - Contingency: reduce the configured channel set if the shared pass cannot meet K9; per-viewer cost stays independent of viewer count (FR-AG-03).
@@ -595,23 +594,27 @@ The frontier (the current cut) is held in a **max-heap keyed on exact projected 
 
 Worked example: a LOD box 1.0 m tall at `z = 8` m under `V = 60°` — `f = 1 / (16 · tan 30°) ≈ 0.108`, i.e. 10.8% of the screen height, above the 10% enter band, and the group expands. The same decision by the rational key: `Δy / z = 0.125` against `2 · 0.10 · tan 30° ≈ 0.115` — `0.125 > 0.115`, expanded.
 
-1. Project the root; if it passes the frustum test, push it onto the frontier with its projected size.
+**The query.** The per-frame selection runs as follows:
+
+1. Test the root; if it passes the frustum test, project it and push it onto the frontier with its projected size.
 2. Repeat while an expandable candidate remains:
    - Pop the node with the **greatest projected size**. Exact projected size is the primary key; the node index is the terminal tie-break, giving a total, deterministic order.
-   - Finalise the node as an entry when any terminal condition holds: a device leaf becomes a device instance entry; a group whose published availability bit is clear — no local channel reports a value — becomes a group entry carrying no value (FR-AG-04); a projected size below the applicable size threshold becomes a blended group entry (the §9.3 enter/exit bands); and a node whose expansion would breach the budget becomes a blended group entry. Groups with no device descendant never enter the index and are never emitted (§6.1).
+   - Finalise the node as an entry when any terminal condition holds: a device leaf becomes a device instance entry; a projected size below the applicable size threshold becomes a blended group entry (the §9.3 enter/exit bands); and a node whose expansion would breach the budget becomes a blended group entry. Groups with no device descendant never enter the index and are never emitted (§6.1). Liveness shapes values at encode time, never presence: the query reads no per-frame data (Decision 25).
    - A group whose **LOD box is degenerate** (a single device, or coincident devices) has zero projected size at every distance, so the size threshold would blend it forever: it is exempt from the size threshold and expands when its parent expands, subject to the entry budget (Decision 21).
-   - Otherwise **expand** it: remove it; for each direct child, apply the frustum test and push only the visible children with their projected sizes. Expansion is admitted by an O(1) reservation — `entries − 1 + deg(v) ≤ B` (`B` ≈ 5,000) — while `entries` grows by one less than the number of visible children pushed, the running cut size (`finalised entries + frontier nodes`). `deg(v)` is O(1) from the node's `child_count` (§5), so a huge-fan-in node is rejected without enumerating its children.
+   - Otherwise **expand** it: remove it; for each direct child, apply the frustum test and push only the visible children with their projected sizes. Expansion is admitted by an O(1) reservation against a threshold chosen by the group's prior mode (§9.3): `entries − 1 + deg(v) ≤ B` for a group already expanded, and `entries − 1 + deg(v) ≤ B − Δ` for a group entering detail from blended (`B` ≈ 5,000). While `entries` grows by one less than the number of visible children pushed, the running cut size (`finalised entries + frontier nodes`). `deg(v)` is O(1) from the node's `child_count` (§5), so a huge-fan-in node is rejected without enumerating its children.
 3. Halt when no expandable candidate remains; every node still held is finalised (leaves as device instances, internal nodes as summaries). The output is the union of finalised nodes.
 
 A child's LOD box is contained by its parent's LOD box, so projected size is monotone down the tree for children at or beyond the parent's centre depth; a nearer child can measure larger, so the frontier's size bound is approximate — determinism, the budget (`entries ≤ B`), and bit-exactness do not depend on it, and the greedy's detail choice carries the exception. Geometry boxes likewise nest — each group's contains its children's — and take no part in this ordering.
 
-Each entry carries its kind and its identity — the flat-array node index, resolved to a config identity through the connect-time manifest (§10.3, Decision 11); a group entry that expands also carries the internal `expanded` transition relative to the viewer's prior expansion state (§9.3); the wire transitions appeared and removed are assigned at encode time, against the last written frame (§10.3, §10.4), and `expanded` surfaces on the wire as appeared entries for the newly revealed devices. Values are not resolved by the query: the encoder maps each index to its source at encode time (§10.3). The result is deterministic given `(topology, state, camera, selection)` and the viewer's prior expansion state (§9.3), with `entries ≤ B`. The viewer's selected object (FR-VS-02) is force-included every frame, taking one of the `B` entry slots.
+Each entry carries its kind and its identity — the flat-array node index, resolved to a config identity through the connect-time manifest (§10.3, Decision 11); a group entry that expands also carries the internal `expanded` transition relative to the viewer's prior expansion state (§9.3); the wire transitions appeared and removed are assigned at encode time, against the last written frame (§10.3, §10.4), and `expanded` surfaces on the wire as appeared entries for the newly revealed devices. Values are not resolved by the query: the encoder maps each index to its source at encode time (§10.3). The result is deterministic given `(topology, camera, selection)` and the viewer's prior expansion state (§9.3), with `entries ≤ B`. The viewer's selected object (FR-VS-02) is force-included every frame, taking one of the `B` entry slots.
 
 ### 9.3 Anti-Flicker
 
 **Size hysteresis:** enter detailed view at 10%, exit at 8% (FR-VS-06, R7) — fractions of the screen height. A group whose LOD box is degenerate has no measurable size and is not subject to this band (Decision 21).
 
-**Budget hysteresis:** the entry budget cuts the frontier independently of on-screen size, so a group near the budget edge can flip between blended and detailed as unrelated scene contents change — frontier ordering cannot absorb this. The running cut size therefore carries its own band: expansion is admitted while `entries < B`, but a node already expanded is retained until the cut falls below `B − Δ` (`Δ` defaults to 10% of `B`, §9.5), so the budget edge does not oscillate. The size and budget bands are independent and configurable.
+**Budget hysteresis:** the entry budget cuts the frontier independently of on-screen size, so a group near the budget edge can flip between blended and detailed as unrelated scene contents change — frontier ordering cannot absorb this. The running cut size therefore carries its own band: a group already in detail is admitted while `entries − 1 + deg(v) ≤ B`, and a group entering detail from blended needs `Δ` of headroom, `entries − 1 + deg(v) ≤ B − Δ` (`Δ` defaults to 10% of `B`, §9.5), so a group in the band `[B − Δ, B]` keeps its mode and the budget edge does not oscillate. The size and budget bands are independent and configurable.
+
+A group's mode is `expanded` iff it was absent from the prior cut as an entry and a child of it is present in that cut; a group with no prior cut is blended.
 
 A group's `expanded` transition in the visibility result (§9.2) causes its newly revealed devices to be transmitted in full (FR-TR-02), covering transitions the hysteresis bands do not absorb.
 
@@ -854,8 +857,8 @@ Named budgets sum to ≤ 7.5 ms; overruns do not cascade across frames. K2 measu
 | Attention | Limit-band mapping and absence levels vs a scalar reference; max-propagation property tests | FR-TD-11, FR-AG-06 |
 | Differential | Engine traversal/selection vs flat-list brute-force reference, including a camera with geometry boxes behind the apex plane | R1 |
 | Selection | Exact-size heap refinement vs brute-force ranked cut | R5, K3, FR-VS-07 |
-| Hysteresis | Camera path across frames N and N+1: the enter/exit bands hold — no flicker between blended and detailed at the threshold; the budget band absorbs edge flips | FR-VS-06, R7 |
-| Boundary | Empty and device-less groups (accepted, pruned from the visible set, parents report the remaining contributions per FR-AG-04); degenerate groups (single device, coincident devices) expand with their parent; non-multiple-of-8 counts | R2 |
+| Hysteresis | Camera path across frames N and N+1: the enter/exit bands hold — no flicker between blended and detailed at the threshold; the budget band absorbs edge flips — a group entering detail from blended holds until the cut moves by `Δ` | FR-VS-06, R7 |
+| Boundary | Empty and device-less groups (accepted, pruned from the visible set, parents report the remaining contributions per FR-AG-04); degenerate groups (single device, coincident devices) expand with their parent; non-multiple-of-8 counts; a dark room (all channels unavailable) expands to device entries carrying unavailable slots | R2 |
 | Degradation | Flat hierarchy (all devices under the root) returns a single blended entry within budget, with exact aggregates | R5, G2 |
 | Invariant | Boot-time structural scan; declared-`aabb` containment; parent geometry ⊇ child geometry; geometry box ⊇ LOD box | R1, R3 |
 | Integration | Backend alpha / end-to-end | FR-CD-08 |
@@ -969,12 +972,13 @@ Each decision states its decision in the first sentence, gives labelled aspects 
 | 16 | State-table concurrency: lock-free atomics, overwrite back-pressure, freshness storage, frame clock | §2, §3.2, §5, §7 |
 | 17 | Client rendering: InstancedMesh over a pre-allocated VBO | §2, §11.1 |
 | 18 | Technology stack: Rust engine, simulator, and harness; Three.js client over WebGL; WebSocket binary transport; Vite/TypeScript demo tooling | §2, §3, §10.1, §17 |
-| 19 | Engine configuration defaults: budget hysteresis Δ = 10% of `B`; camera-context timeout 1 s | §9.1, §9.3, §9.5 |
+| 19 | Engine configuration defaults: budget hysteresis Δ = 10% of `B`; camera-context timeout 1 s | §9.1, §9.2, §9.3, §9.5 |
 | 20 | Type templates and policy overrides: the type libraries supply a device's `metrics` and a group's `channels` with their `policy`; a node refines policy fields per key; expanded at boot before validation | §4, §16.2 |
 | 21 | Group retention and degenerate LOD boxes: prune groups with no device descendant bottom-up; degenerate groups bypass the size threshold | §4, §5, §6.1, §9.2, §9.3, §15 |
 | 22 | Declared group extents: optional per-group `aabb` with boot containment; geometry box (declared or derived) for culling and drawing, LOD box (derived) for projected size | §4, §5, §6.1, §6.2, §9.2, §11, §15 |
 | 23 | Simulator operating parameters: rates and value models in a unit-keyed simulator profile — the simulator's configuration file — versioned with the report | §12 |
 | 24 | Frustum test: the five-plane inclusive box test — four wall planes plus the apex plane — defines visibility; conservative over-reporting is accepted | §6.3, §9.2, §11, §15 |
+| 25 | Availability-free visibility: the query is purely geometric — the availability terminal is gone and liveness shapes values at encode time only | §3.2, §5, §8, §9.2, §15 |
 
 ### Decision 1 — Frontier ordering
 
@@ -982,7 +986,7 @@ The frontier is a fixed-capacity **max-heap keyed on exact projected size**, wit
 
 - **Structure.** The hierarchy is the single structure driving visibility and aggregation; the state table is a separate flat value store aligned to leaf order. A straightforward index of device positions cannot answer *both* "what is on screen?" and "what are this group's aggregate channel values?" within budget, so the index mirrors the semantic hierarchy and carries bounding volumes — one traversal yields visibility and aggregation together.
 - **Primary key.** Exact projected size is the primary key.
-- **Ordering function.** Ordering is a pure function of `(topology, state, camera, selection)`; the node index is a terminal tie-break for equal sizes only. The index is immutable after boot, so the frontier holds node references and per-frame sizes.
+- **Ordering function.** Ordering is a pure function of `(topology, camera, selection)`; the node index is a terminal tie-break for equal sizes only. The index is immutable after boot, so the frontier holds node references and per-frame sizes.
 - **Bounds.** Heap operations are `O(log B)`; the frontier is bounded by `B` ≈ 5,000.
 - **Budget-edge flicker.** Handled by the entry-count hysteresis in §9.3.
 - **Alternatives rejected.** Bucketed ordering with a bucket size-error bound or a bucket-width parameter; a flat device-position index serving visibility beside a separate aggregation structure — it cannot answer both queries within budget.
@@ -1149,7 +1153,7 @@ Ingest writes each `(device, metric)` slot atomically and readers load the newes
 
 - **Back-pressure.** A saturated ingest overwrites stale values instead of buffering, which is what binds memory (FR-IS-05) and is the consequence K1 requires.
 - **Freshness storage.** Each slot is one 64-bit word `{value f32, arrival_ms u32}`, its value boot-initialised to a quiet NaN and written atomically — the value and its frame-clock stamp advance together, so a reader never pairs a new value with an old stamp. A frame derives availability as `value is finite ∧ frame_clock.wrapping_sub(arrival_ms) < freshness_ms`, against the clock captured once per frame: finiteness is the never-written test, because ingest rejects non-finite values (FR-IS-02), so no flag, timer, or second write has anything to keep in sync (FR-IS-03). A stamp never leads the clock in elapsed time; a next-frame evaluation over-states true age by at most the inter-frame gap, and a same-frame inclusion under-states it by at most the pass offset — both inside the 18 ms floor at the cadence of §3.2. The u32 wraps about every 49.7 days of uptime, and wrap-safe subtraction keeps the check exact while a slot's age is below one wrap period; a slot silent for a full period or more can alias as fresh for at most `freshness_ms` once per period, and the schema bounds `freshness_ms` at 24 h, well inside the horizon.
-- **Frame clock.** A register holding a monotonic-millisecond value, advanced exactly once per frame, at the frame path's opening (§3.2); until that first advance, ingest stamps from the live clock, so readings accepted before the first frame carry their true time. Ingest stamps each accepted reading from the register thereafter; aggregation, visibility, and encode capture it once into a local per frame and use that value throughout, so availability is constant within a frame. The guarantee holds while each step evaluates within `freshness_ms` of the register's advance, which the §3.2 cadence and the 18 ms floor ensure; step 3 publishes one availability bit per retained group with its snapshot, which visibility reads instead of values.
+- **Frame clock.** A register holding a monotonic-millisecond value, advanced exactly once per frame, at the frame path's opening (§3.2); until that first advance, ingest stamps from the live clock, so readings accepted before the first frame carry their true time. Ingest stamps each accepted reading from the register thereafter; aggregation and encode capture it once into a local per frame and use that value throughout, so availability is constant within a frame. The guarantee holds while each step evaluates within `freshness_ms` of the register's advance, which the §3.2 cadence and the 18 ms floor ensure.
 - **Alternatives rejected.** A mutex or sharded-lock table would plausibly meet K1 (300,000 atomic stores/s is well within reach of coarser schemes), so lock-freedom is a preference rather than a necessity; an MPSC queue with bounded backlog — queued readings would age out of the freshness window (FR-IS-03) under load; a separate availability flag — clearing it needs the frame-clock stamp anyway, so it is a second write kept in sync with the first; latest-by-sample-timestamp selection — it makes the source clock load-bearing for correctness and turns ingest into a conditional read-modify-write, while the single ordered stream makes reordering unreachable (FR-IS-01); per-viewer or per-request state tables — duplicated state.
 
 ### Decision 17 — Client rendering
@@ -1173,9 +1177,10 @@ The entry-budget hysteresis band defaults to 10% of `B`, and the camera-context 
 
 **Implements:** PRD-001 FR-VS-08.
 
-- **Budget band.** Expansion is admitted while `entries < B`; a node already expanded is retained until the cut falls below `B − Δ` (§9.3), so the entry budget does not oscillate at its edge.
+- **Budget band.** The admission reservation is mode-dependent (§9.3): a group already in detail is admitted under the hard bound `entries − 1 + deg(v) ≤ B`, a group entering detail from blended under the soft bound `entries − 1 + deg(v) ≤ B − Δ`; a group in `[B − Δ, B]` keeps its mode, so the entry budget does not oscillate at its edge.
+- **Mode.** A group is expanded iff it was absent from the prior cut as an entry and a child of it is present in that cut; a group with no prior cut is blended. The mode is the only query state carried from its own prior result; the camera and the held selection are client inputs.
 - **Camera timeout.** A last known camera context is reused until the 1 s timeout, after which that viewer's updates are held (§9.1).
-- **Alternatives rejected.** No budget band — unrelated scene contents would flip a group between blended and detailed at the budget edge (§9.3); no camera-context timeout — a stale context would be reused indefinitely, against K11 freshness.
+- **Alternatives rejected.** No budget band — unrelated scene contents would flip a group between blended and detailed at the budget edge (§9.3); a retention waiver letting an already-expanded node skip the reservation — it can push the cut past `B`, against FR-VS-07's worst-case bound; no camera-context timeout — a stale context would be reused indefinitely, against K11 freshness.
 
 ### Decision 20 — Type templates and policy overrides
 
@@ -1228,3 +1233,12 @@ The frustum test is the five-plane inclusive box test — the four wall planes o
 - **Accepted over-reporting.** The boxes are world-axis-aligned (§5.2) and the camera is arbitrarily oriented, so with a rotated camera different walls can be passed by different corners and a box may pass all five planes without intersecting the pyramid. Such a node stays in the cut: if it expands, its children are culled individually and it vanishes; if it blends, its marker is drawn from the same geometry box that passed the test and projects off screen (§11). The cost is at most one entry per offending node, bounded by `B` (§9.2).
 - **Parity.** The engine and the §6.3 reference run the same box test on the same boxes — the geometry box for groups, the device position for leaves — so the ranked cut compares by construction; pinning the test rather than the ideal is what keeps the comparison reproducible across two independent implementations.
 - **Alternatives rejected.** True intersection via a separating-axis test — roughly a three- to five-fold cost on every visible box and, decisively, two independently implemented exact tests diverging at the boundary cases the §6.3 comparison lives on, for an artifact no KPI or viewer can observe; a near plane at a non-zero distance — a free parameter absent from the §9.1 camera context, changing the visible set with no authority behind the value; testing the eight corners only — a box can pierce the pyramid with every corner outside, so corner-only testing false-negatives visible geometry.
+
+### Decision 25 — Availability-free visibility
+
+The visibility query reads no per-frame data: the availability terminal is removed, groups expand under the geometric rules regardless of liveness, and a channel's unavailability shapes values at encode time, never presence.
+
+- **The change.** Step 5 reads only the index, the camera context, the selection, and the prior cut's expansion state (§9.2); the per-group availability bit is retired end to end — the §8 publish no longer carries it, the aggregate buffers no longer hold it, and the terminal conditions are kind, size band, and budget alone. Value semantics are untouched: FR-AG-04's no-value rule and the encode-side per-slot availability test against the frame clock (§3.2 step 6) already carried them.
+- **Cost accepted.** A dark subtree no longer collapses to one no-value entry: a zoomed-in offline group expands into device entries whose slots ride as unavailable, costing appeared-frame bytes and competing for `B` like any other entry. Steady-state egress is unchanged, since an unavailable slot, once sent, is suppressed until it changes (§10.3); §15's boundary row exercises the dark-room case.
+- **Presence is geometry; data is values.** A group's marker survives its blackout, and its revival changes no cut membership — the client's distinction between `removed` and present-without-values (§10.4) derives purely from geometry and the diff.
+- **Alternatives rejected.** Keeping the availability terminal — it couples the query to the per-frame snapshot, so an identical camera context and selection can still yield different cuts, and the compression it buys makes detail depend on liveness, at odds with FR-VS-05's size basis; carrying a data epoch as a query input — the same coupling under a different name, a per-frame input with no geometric meaning.
