@@ -623,8 +623,7 @@ A group's `expanded` transition in the visibility result (§9.2) causes its newl
 
 - Explicitly do **not** rely on raw traversal of 100k nodes (≈ 3 ms cache-hot best case, exceeds budget).
 - Cost is bounded by the work actually performed: at most `B` branching expansions plus O(depth) single-child pass-throughs, each an `O(log B)` heap push/pop plus a projection, so total work is O((B + depth)·log B), not O(visible). At `B` ≈ 5,000 the log factor is small (~13 comparisons) and the ordering cost is a minor fraction of the traversal cost.
-- Frustum testing dominates the per-expansion cost in aggregate: every direct child is tested while only visible children are pushed, and culled children typically reject on the first plane. Test the frustum before projecting so culled children skip the projection.
-- The per-child frustum test on geometry boxes removes whole off-frustum subtrees before they enter the frontier.
+- Frustum testing dominates the per-expansion cost in aggregate: every direct child is tested — a group on its geometry box, a leaf on its position — while only visible children are pushed, a culled child's subtree is removed before it enters the frontier, and culled children typically reject on the first plane. Test the frustum before projecting so culled children skip the projection.
 - The per-viewer frontier is bounded by the cut size `≤ B` and held in a fixed-capacity scratch heap reused every frame.
 - **Idle viewers.** When the camera context and selection match the previous query bitwise, the query returns the persisted cut (§5.5) unchanged instead of re-running; aggregation and encoding still run every frame.
 - Contingencies: coarse grid first pass; iterate the top ~50 groups directly.
