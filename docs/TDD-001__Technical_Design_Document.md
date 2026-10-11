@@ -399,7 +399,7 @@ The engine separates its memory by access pattern into four regions: the **index
 | Index | **Node fields:** kind, geometry box, LOD box, child access + subtree size, channel slice `(channel_base, channel_count)`, contribution sources (per channel), row base. **Global arrays:** metric-def, channel-def, limit, seed, merge | Once at boot | Every frame: per viewer (visibility, encode); once per frame, shared (aggregation) |
 | State table | Latest value and frame-clock arrival stamp per `(device, metric)`, plus the per-device row pointers array; availability derived per pass | Continuously, at ingest | Once per frame, per group (aggregation); per viewer, per device entry (encode) |
 | Aggregate buffers | Per-group per-channel accumulators for groups retained in the index; the reserved attention channel and per-device attention level (`u8` slots) | Once per frame | Per viewer, per frame |
-| Session tables | Per-viewer frame epochs, device and group last-sent baselines, the attention baseline, and previous-frame node list | On socket write | Per viewer, per frame (diff and encode) |
+| Session tables | Per-viewer frame epochs, device and group last-sent baselines, the attention baseline, the previous-frame node list, and the cut cache | On socket write; the cut cache on query | Per viewer, per frame (diff, encode, and query) |
 
 ### 5.1 Reading Model
 
@@ -469,7 +469,7 @@ The **state table** is separate from the index and laid out **device-major in co
 
 ### 5.5 Session tables
 
-**Arrays and types.** Each viewer's session holds five arrays:
+**Arrays and types.** Each viewer's session holds six arrays:
 
 | Array | Element | Type | Note |
 | --- | --- | --- | --- |
@@ -478,12 +478,13 @@ The **state table** is separate from the index and laid out **device-major in co
 | group baseline | the last-sent wire value, widened into f32 | `f32` | indexed by the group's accumulator lane (`row base` + local channel); `sum`/`count` cells hold the f32 wire value, the f16 channels their quantised value widened without loss |
 | attention baseline | the last-sent attention level | `u8` | indexed by node; the reference for the sent-on-change rule (§10.3) |
 | previous-frame node list | a previously visible node index | `u32` | the last written frame's visible set, keyed by node index (§10.3) |
+| cut cache | a query entry's node index | `u32` | the last computed cut, served when the camera context and selection match bitwise; advanced on query, never on write (§9.2) |
 
 **Value slots.** The device and group baselines each use their region's own index space, whose local order matches the wire's per-entry slots (§10.4): a device metric sits at its state-table slot (the leaf's `row base` plus its local slot), and a group channel at its accumulator lane (the group's `row base` plus its local channel). The layout is fixed at boot, so every session allocates arrays of the same shape.
 
 **The current epoch.** The stamps come from one `u32` **frame number** held in the session's state beside these arrays: it starts at 0, each diff reads the stamps to classify entries, and each write commit advances the number by one and stamps the visible nodes' cells with it — so `0` remains the mark of a never-visible node (§10.3). The number wraps once every ~828 days of continuous writes at 60 Hz; for one write the visible stamps and the never-visible mark are both `0`, so a node first seen in that interval reads as continuous and its appeared send waits one write. Any stamp other than the current number marks a gap and takes the appeared path, and removal scans the previous-frame list, not the stamps (§10.3).
 
-**Sizes.** The five arrays take ~1.2 MB per viewer at 100k: the device baseline covers ~300k device-metric slots at 2 B (~600 KB), the group baseline covers the ~28k group-channel slots at 4 B (~114 KB), the epochs are ~102k at 4 B (~407 KB), the attention baseline is ~102k at 1 B (~102 KB), and the previous-frame list adds ≤ B entries at 4 B.
+**Sizes.** The six arrays take ~1.3 MB per viewer at 100k: the device baseline covers ~300k device-metric slots at 2 B (~600 KB), the group baseline covers the ~28k group-channel slots at 4 B (~114 KB), the epochs are ~102k at 4 B (~407 KB), the attention baseline is ~102k at 1 B (~102 KB), the previous-frame list adds ≤ B entries at 4 B, the cut cache adds ≤ B entries at 4 B (~20 KB), and its key stores the six camera-context fields and the selection (~52 B).
 
 ## 6. Hierarchical Spatial Index
 
@@ -530,7 +531,7 @@ Unit and reduction scans apply to configured channels and their contributions; t
 
 ### 6.3 Correctness Oracle
 
-Correctness is established against an **independent brute-force reference**, not a third-party spatial structure. The reference operates on the **flat device list directly** — it does not walk the index tree, so it does not share any traversal or pruning defect it is meant to catch. For the same `(topology, state, camera, selection)` it frustum-tests every device position (using the same inclusive point test as the engine, Decision 12), derives its own boxes per Decision 22 — a geometry box from the declared `aabb` else the union of its children's geometry boxes, device-less children included, and a LOD box from its devices' positions alone — culls its groups with the same box test as the engine, and computes the ranked cut under the same frontier discipline (the §9.2 pop order, admission check, and terminal conditions), reducing the same readings. Same boxes, same inclusive test, same behind-apex reject (§9.2): the compared cut is a property of the shared box test, not of any one implementation's pruning. **Three outcomes are compared, each from the same cold expansion state, so the size and budget bands (§9.3) start equal on both sides:** the visible device-leaf set (culling), the ranked cut (ranking, entry budget, and expansion), and each cut entry's channel values (aggregation). This mirrors the brute-force scalar reference used for aggregation (§8, §15), giving one independent reference per subsystem (R1; K4 for the aggregation reference).
+Correctness is established against an **independent brute-force reference**, not a third-party spatial structure. The reference operates on the **flat device list directly** — it does not walk the index tree, so it does not share any traversal or pruning defect it is meant to catch. For the same `(topology, state, camera, selection)` it frustum-tests every device position (using the same inclusive point test as the engine, Decision 12), derives its own boxes per Decision 22 — a geometry box from the declared `aabb` else the union of its children's geometry boxes, device-less children included, and a LOD box from its devices' positions alone — culls its groups with the same box test as the engine, and computes the ranked cut under the same frontier discipline (the §9.2 pop order, admission check, and terminal conditions), reducing the same readings. Same boxes, same inclusive test, same behind-apex reject (§9.2): the compared cut is a property of the shared box test, not of any one implementation's pruning. The oracle drives the query directly from a cold expansion state; the engine's cut cache (§5.5) is a frame-path optimisation transparent to the warm recompute, so the comparison never sees a cached cut. **Three outcomes are compared, each from the same cold expansion state, so the size and budget bands (§9.3) start equal on both sides:** the visible device-leaf set (culling), the ranked cut (ranking, entry budget, and expansion), and each cut entry's channel values (aggregation). This mirrors the brute-force scalar reference used for aggregation (§8, §15), giving one independent reference per subsystem (R1; K4 for the aggregation reference).
 
 The semantic n-ary tree has no shared basis with a binary spatial BVH, so the `bvh` crate is not used. The oracle verifies **behavior over a correct structure** (§9): structural invariants (§6.2) cover the layout, the configuration stages (§4, §6.2) cover validity, frame-to-frame behavior the input tuple cannot express — ingest across frames N and N+1 and the size and budget hysteresis bands — is tested in §15, manifest conformance in §15, and performance in §16. Both sides run on sampled queries, so a defect that never manifests on a sampled tuple is out of the oracle's reach by construction; randomised fixtures (§15) broaden the sample.
 
@@ -606,7 +607,7 @@ Worked example: a LOD box 1.0 m tall at `z = 8` m under `V = 60°` — `f = 1 / 
 
 A child's LOD box is contained by its parent's LOD box, so projected size is monotone down the tree for children at or beyond the parent's centre depth; a nearer child can measure larger, so the frontier's size bound is approximate — determinism, the budget (`entries ≤ B`), and bit-exactness do not depend on it, and the greedy's detail choice carries the exception. Geometry boxes likewise nest — each group's contains its children's — and take no part in this ordering.
 
-Each entry carries its kind and its identity — the flat-array node index, resolved to a config identity through the connect-time manifest (§10.3, Decision 11); a group entry that expands also carries the internal `expanded` transition relative to the viewer's prior expansion state (§9.3); the wire transitions appeared and removed are assigned at encode time, against the last written frame (§10.3, §10.4), and `expanded` surfaces on the wire as appeared entries for the newly revealed devices. Values are not resolved by the query: the encoder maps each index to its source at encode time (§10.3). The result is deterministic given `(topology, camera, selection)` and the viewer's prior expansion state (§9.3), with `entries ≤ B`. The viewer's selected object (FR-VS-02) is force-included every frame, taking one of the `B` entry slots.
+Each entry carries its kind and its identity — the flat-array node index, resolved to a config identity through the connect-time manifest (§10.3, Decision 11); a group entry that expands also carries the internal `expanded` transition relative to the viewer's prior cut (§9.3); the wire transitions appeared and removed are assigned at encode time, against the last written frame (§10.3, §10.4), and `expanded` surfaces on the wire as appeared entries for the newly revealed devices. Values are not resolved by the query: the encoder maps each index to its source at encode time (§10.3). The result is deterministic and idempotent given `(topology, camera, selection)` and the viewer's prior cut (§9.3) — re-running with an unchanged camera and selection reproduces the prior cut — with `entries ≤ B`. The frame path exploits this: an unchanged camera context and selection reuse the persisted cut bitwise instead of re-querying (Decision 26). The viewer's selected object (FR-VS-02) is force-included every frame, taking one of the `B` entry slots.
 
 ### 9.3 Anti-Flicker
 
@@ -625,7 +626,8 @@ A group's `expanded` transition in the visibility result (§9.2) causes its newl
 - Frustum testing dominates the per-expansion cost in aggregate: every direct child is tested while only visible children are pushed, and culled children typically reject on the first plane. Test the frustum before projecting so culled children skip the projection.
 - The per-child frustum test on geometry boxes removes whole off-frustum subtrees before they enter the frontier.
 - The per-viewer frontier is bounded by the cut size `≤ B` and held in a fixed-capacity scratch heap reused every frame.
-- Contingencies: coarse grid first pass; skip re-query for an idle camera; iterate the top ~50 groups directly.
+- **Idle viewers.** When the camera context and selection match the previous query bitwise, the query returns the persisted cut (§5.5) unchanged instead of re-running; aggregation and encoding still run every frame.
+- Contingencies: coarse grid first pass; iterate the top ~50 groups directly.
 
 ### 9.5 Engine Configuration
 
@@ -979,6 +981,7 @@ Each decision states its decision in the first sentence, gives labelled aspects 
 | 23 | Simulator operating parameters: rates and value models in a unit-keyed simulator profile — the simulator's configuration file — versioned with the report | §12 |
 | 24 | Frustum test: the five-plane inclusive box test — four wall planes plus the apex plane — defines visibility; conservative over-reporting is accepted | §6.3, §9.2, §11, §15 |
 | 25 | Availability-free visibility: the query is purely geometric — the availability terminal is gone and liveness shapes values at encode time only | §3.2, §5, §8, §9.2, §15 |
+| 26 | Exact-match cut cache: an unchanged camera context and selection reuse the persisted cut bitwise; aggregation and encoding run every frame | §5.5, §6.3, §9.2, §9.4 |
 
 ### Decision 1 — Frontier ordering
 
@@ -1242,3 +1245,14 @@ The visibility query reads no per-frame data: the availability terminal is remov
 - **Cost accepted.** A dark subtree no longer collapses to one no-value entry: a zoomed-in offline group expands into device entries whose slots ride as unavailable, costing appeared-frame bytes and competing for `B` like any other entry. Steady-state egress is unchanged, since an unavailable slot, once sent, is suppressed until it changes (§10.3); §15's boundary row exercises the dark-room case.
 - **Presence is geometry; data is values.** A group's marker survives its blackout, and its revival changes no cut membership — the client's distinction between `removed` and present-without-values (§10.4) derives purely from geometry and the diff.
 - **Alternatives rejected.** Keeping the availability terminal — it couples the query to the per-frame snapshot, so an identical camera context and selection can still yield different cuts, and the compression it buys makes detail depend on liveness, at odds with FR-VS-05's size basis; carrying a data epoch as a query input — the same coupling under a different name, a per-frame input with no geometric meaning.
+
+
+### Decision 26 — Exact-match cut cache
+
+An unchanged camera context and selection reuse the previous cut bitwise instead of re-querying; the cache covers the query result only, and the frame path's value stages run every frame regardless.
+
+- **The key and the hit.** The session stores the six camera-context fields — `position[3]`, `forward[3]`, `up[3]`, `width`, `height`, `fov` — and the held selection index, compared on the wire bits; a bitwise match serves the persisted cut (§5.5) and skips the query, and any difference recomputes and re-stores. A drifting client that never repeats a context simply never hits — correctness first — while a static client republishes identical bits every frame.
+- **Why it is exact.** The result is idempotent (§9.2): unchanged inputs with the prior cut as state reproduce that cut under the mode-dependent bands (§9.3, Decision 19), so a hit is what a re-run would produce, and the §6.3 reference — driving the query directly from a cold state — never compares against a cached cut.
+- **Scope.** The cache holds the query result only: aggregation publishes and the encoder's diff run every frame, so a slot that dies or revives changes no cut membership and ships through the always-running encode path (§3.2); the write-anchored previous-frame list (§5.5) remains the transport's, advanced on write only.
+- **Cost.** One persisted cut per session — ≤ B `u32`, ~20 KB at `B` = 5,000 — beside a ~52-byte key; static viewers skip the query entirely, which is §9.4's idle case, previously a contingency.
+- **Alternatives rejected.** Fuzzy matching on quantised camera parameters — it forfeits the fixed point, serving cuts the re-run and the reference would not produce, and defers threshold-crossing flicker instead of absorbing it; keying on the previous-frame node list — it is write-anchored, so a dropped frame would serve a stale cut indefinitely (§10.3); a data epoch in the key — purification removed the query's data coupling, and re-adding it would kill the hit rate for no correctness gain.
