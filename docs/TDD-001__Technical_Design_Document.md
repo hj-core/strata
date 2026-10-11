@@ -4,9 +4,9 @@
 | --- | --- |
 | Document ID | TDD-001 |
 | Title | Server-Side Hierarchical Spatial Filtering Engine — Technical Design |
-| Version | 0.23.0 |
+| Version | 0.25.0 |
 | Status | Draft |
-| Last Updated | 2026-10-09 |
+| Last Updated | 2026-10-10 |
 | Owner | Project maintainer |
 | Related documents | Upstream: PRD-001 (Product Requirements). Downstream: PLN-001 (Master Execution Sequence). |
 
@@ -311,7 +311,7 @@ The topology definition is three JSON documents, loaded as one source by the eng
 | `id` | yes | unique topology-wide (referenced by `parent`) |
 | `parent` | yes | a group id, or `null` for the single root |
 | `type` | yes | shallow template reference into the device type library (Decision 9, Decision 20) |
-| `position` | yes | `[x, y, z]`, finite |
+| `position` | yes | `[x, y, z]`, finite, in metres — the one world unit shared by every position, box, and the camera context |
 | `metrics` | yes | one or more, supplied by `type` — a device node that declares `metrics` is a boot error; at most 15,000, so its complete value set — slot mask plus f16 values, ≈31 KB — fits within half the 64 KB message bound (FR-TR-02, §10.4, Decision 7, Decision 20) |
 | `policy` | no | map from this device's metric labels to any subset of `epsilon`, `freshness_ms`, `absence`, `limits`; merge, defaults, and the unknown-label rule are stated in the Metric policy override bullet below (Decision 20) |
 | `contributes_to` | no | map from this device's metric labels to its containing group's channel ids; a metric may name several targets; never carried by a device type (Decision 9) |
@@ -373,7 +373,7 @@ The manifest is a flat JSON array **in index order — array position is the nod
 | `position` | devices | `[x, y, z]` | as authored |
 | `aabb` | groups (when authored) | `[[min],[max]]` | as authored, preserved beside its derived boxes |
 | `geometry_box` | groups | `[[min],[max]]` | derived at materialization — declared `aabb` else union (§6.1); the frustum test and the client's draw transform (§11); devices carry no boxes — theirs is their `position` |
-| `lod_box` | groups | `[[min],[max]]` | derived at materialization — the union of its devices' positions (§5.2); projected height and expansion ranking (§9.2) |
+| `lod_box` | groups | `[[min],[max]]` | derived at materialization — the union of its devices' positions (§5.2); projected size and expansion ranking (§9.2) |
 | `metrics` | devices | resolved list | label, unit, and the merged settings per metric; `metric_slot` = array position |
 | `channels` | groups | resolved list | id, reduction, and the merged settings per channel |
 | `policy` | devices and groups (when authored) | map | as authored, beside the merged settings |
@@ -416,7 +416,7 @@ The engine separates its memory by access pattern into four regions: the **index
 | --- | --- | --- | --- | --- |
 | kind | leaf device or internal group | enum (`u8`) | Visibility | Finalise a leaf as a device instance and a group as a group entry; kind is stored directly rather than inferred from subtree size, which separates the two only because device-less groups are pruned (§6.1, §9.2, Decision 21). |
 | geometry box | AABB min/max | `[f32; 6]` | Visibility | Frustum test and the extent the client draws; the declared `aabb` when present, else the derived box; contains every descendant device position and declared `aabb` (Decision 22). |
-| LOD box | AABB min/max | `[f32; 6]` | Visibility | Projected on-screen height, expansion order, and the entry-budget ranking; always the union of the node's devices' positions (Decision 22). |
+| LOD box | AABB min/max | `[f32; 6]` | Visibility | Projected size, expansion order, and the entry-budget ranking; always the union of the node's devices' positions (Decision 22). |
 | subtree size | node count | `u32` | Visibility | Subtree bounds and skip-offset pruning; `skip_index = index + subtree_size` is derived, not stored. Node count only — no device-count extent is needed (aggregation uses per-channel offset lists, Decision 7). |
 | child access | `child_count` | `u32` | Visibility | `child_count` gives `deg(v)` in O(1) for the expansion-budget check; `first_child = index + 1` and `next_sibling = sibling + subtree_size` are derived, not stored (Decision 8). |
 | channel slice | `(channel_base, channel_count)` | `[u32; 2]` | Aggregation, Encoder | A slice `[channel_base, channel_base + channel_count)` of the global channel-def array; ≤16 per group, fixed at boot. |
@@ -571,33 +571,43 @@ Each group carries a **reserved unitless attention channel** (the group's attent
 
 ## 9. Visibility Query and LOD Selection
 
-### 9.1 Inputs
+### 9.1 Camera Context Inputs
 
-Per viewer, per frame: camera pose (position and orientation), screen width/height, pixel ratio, field of view (FR-VS-01). Without these the on-screen-size threshold is ambiguous. If the context is absent or late, the last known context is reused until a timeout, after which that viewer's stream is held (FR-VS-08).
+Per viewer, per frame: camera pose (position and orientation), screen width/height, field of view (FR-VS-01). The pose and field of view, with the viewport aspect — `width / height` — drive culling; the field of view also sets the size threshold's per-frame conversion; width and height enter only through that aspect. The client's device pixel ratio is not part of the context: the screen-height fraction is identical in device and CSS pixels (§9.2), so it never crosses the wire, and the client's raster floor (§11) applies it where it originates. If the context is absent or late, the last known context is reused until a timeout, after which that viewer's stream is held (FR-VS-08).
+
+**Example context.** Camera position `(0.0, 3.0, 12.0)` m, `forward (0.0, 0.0, -1.0)`, `up (0.0, 1.0, 0.0)`; screen `2560 × 1440`; field of view `60°`. The pose supplies the frustum planes and each box's centre depth `z` and screen-vertical extent `Δy`; the screen contributes only its aspect — 1.778 — so the horizontal field of view is `2 · atan(tan 30° × 1.778) ≈ 91.5°`; the client's pixel ratio `2.0` alters no engine value — only the §11 floor uses it, client-side at raster time; the field of view sets the frustum's vertical extent and §9.2's per-frame conversion.
 
 ### 9.2 Algorithm
 
 The query produces a per-viewer, per-frame **visibility result**: a bounded list of *entries*, each either a device instance or a blended group entry. It selects a **cut** through the visible hierarchy — the set of nodes that each become one entry — under the entry budget (R5, K3, FR-VS-07). Values are not resolved here; the encoder reads them from the state table and aggregate buffers (§10).
 
-The frontier (the current cut) is held in a **max-heap keyed on exact projected on-screen height**, not in a traversal stack, so selection is best-first among frontier nodes: the largest node in the frontier is expanded first, regardless of its depth or position in the array. The heap is a **fixed-capacity, per-viewer scratch buffer**, reused every frame and sized to the entry budget `B` (the frontier can never exceed `B`). The index (node indices, layout, AABBs) is immutable after boot (§5), so the heap carries only node references and per-frame heights; each node enters the frontier at most once per query.
+The frontier (the current cut) is held in a **max-heap keyed on exact projected size**, not in a traversal stack, so selection is best-first among frontier nodes: the largest node in the frontier is expanded first, regardless of its depth or position in the array. The heap is a **fixed-capacity, per-viewer scratch buffer**, reused every frame and sized to the entry budget `B` (the frontier can never exceed `B`). The index (node indices, layout, AABBs) is immutable after boot (§5), so the heap carries only node references and per-frame sizes; each node enters the frontier at most once per query.
 
-**Projected on-screen height** is the vertical pixel extent of the node's **LOD box** — the union of its devices' positions (Decision 22): its eight corners are transformed to screen space at that box's centre depth, and the key is `max_y − min_y` in device pixels (pixel ratio applied). The engine and the brute-force reference compute the identical value, so the frontier's total order is reproducible (§6.3).
+**Projected size** — the screen-height fraction of FR-VS-06 — is the fraction of the screen height the node's **LOD box** — the union of its devices' positions (Decision 22) — occupies, computed in f32 from the box's eight corners at that box's centre depth under the §9.1 camera context. The frontier heap is keyed on the rational `Δy / z` — the screen-vertical extent of the box's eight corners (rise along the camera's up axis) over the centre depth — monotone in the projected size; the §9.3 bands are compared per frame as `Δy / z ≥ 2 · f₀ · tan(V / 2)`, with f₀ the band default of §9.5 and V the camera's vertical field of view. The engine and the brute-force reference compute the identical value, so the frontier's total order is reproducible (§6.3).
 
-1. Project the root; if it intersects the frustum, push it onto the frontier with its projected height.
+**Computing the projected size.** Per viewer, per frame, the camera pose and vertical field of view `V` set the projection; per node, the LOD box's eight corners and centre depth `z` come from the manifest (§4.6):
+
+1. Transform the eight corners to camera space, all at the box's centre depth, and take the screen-vertical extent `Δy` — the rise along the camera's up axis, `max − min` over the eight corners. A rolled camera reads the box's horizontal spread as vertical, which is why the extent is measured on the projected corners rather than taken as the box's world height.
+2. The screen-height fraction is `f = Δy / (2 · z · tan(V / 2))` — the same fraction as `px / H`, whether the viewport is measured in device or CSS pixels.
+3. The projected size is the fraction itself: `f ≥ f₀` directly, or in the heap's rational key, `Δy / z ≥ 2 · f₀ · tan(V / 2)` — with f₀ the §9.5 band default and V the viewer's vertical field of view.
+
+Worked example: a LOD box 1.0 m tall at `z = 8` m under `V = 60°` — `f = 1 / (16 · tan 30°) ≈ 0.108`, i.e. 10.8% of the screen height, above the 10% enter band, and the group expands. The same decision by the rational key: `Δy / z = 0.125` against `2 · 0.10 · tan 30° ≈ 0.115` — `0.125 > 0.115`, expanded.
+
+1. Project the root; if it intersects the frustum, push it onto the frontier with its projected size.
 2. Repeat while an expandable candidate remains:
-   - Pop the node with the **greatest projected height**. Exact height is the primary key; the node index is the terminal tie-break, giving a total, deterministic order.
-   - Finalise the node as an entry when any terminal condition holds: a device leaf becomes a device instance entry; a group whose published availability bit is clear — no local channel reports a value — becomes a group entry carrying no value (FR-AG-04); a height below the applicable size threshold becomes a blended group entry (enter 120 px, or exit 100 px once expanded; §9.3); and a node whose expansion would breach the budget becomes a blended group entry. Groups with no device descendant never enter the index and are never emitted (§6.1).
-   - A group whose **LOD box is degenerate** (a single device, or coincident devices) projects to 0 px at every distance, so the size threshold would blend it forever: it is exempt from the size threshold and expands when its parent expands, subject to the entry budget (Decision 21).
-   - Otherwise **expand** it: remove it; for each direct child, apply the frustum test and push only the visible children with their projected heights. Expansion is admitted by an O(1) reservation — `entries − 1 + deg(v) ≤ B` (`B` ≈ 5,000) — while `entries` grows by one less than the number of visible children pushed, the running cut size (`finalised entries + frontier nodes`). `deg(v)` is O(1) from the node's `child_count` (§5), so a huge-fan-in node is rejected without enumerating its children.
+   - Pop the node with the **greatest projected size**. Exact projected size is the primary key; the node index is the terminal tie-break, giving a total, deterministic order.
+   - Finalise the node as an entry when any terminal condition holds: a device leaf becomes a device instance entry; a group whose published availability bit is clear — no local channel reports a value — becomes a group entry carrying no value (FR-AG-04); a projected size below the applicable size threshold becomes a blended group entry (the §9.3 enter/exit bands); and a node whose expansion would breach the budget becomes a blended group entry. Groups with no device descendant never enter the index and are never emitted (§6.1).
+   - A group whose **LOD box is degenerate** (a single device, or coincident devices) has zero projected size at every distance, so the size threshold would blend it forever: it is exempt from the size threshold and expands when its parent expands, subject to the entry budget (Decision 21).
+   - Otherwise **expand** it: remove it; for each direct child, apply the frustum test and push only the visible children with their projected sizes. Expansion is admitted by an O(1) reservation — `entries − 1 + deg(v) ≤ B` (`B` ≈ 5,000) — while `entries` grows by one less than the number of visible children pushed, the running cut size (`finalised entries + frontier nodes`). `deg(v)` is O(1) from the node's `child_count` (§5), so a huge-fan-in node is rejected without enumerating its children.
 3. Halt when no expandable candidate remains; every node still held is finalised (leaves as device instances, internal nodes as summaries). The output is the union of finalised nodes.
 
-A child's LOD box is contained by its parent's LOD box, so projected height is monotone down the tree for children at or beyond the parent's centre depth; a nearer child can project taller, so the frontier's height bound is approximate — determinism, the budget (`entries ≤ B`), and bit-exactness do not depend on it, and the greedy's detail choice carries the exception. Geometry boxes likewise nest — each group's contains its children's — and take no part in this ordering.
+A child's LOD box is contained by its parent's LOD box, so projected size is monotone down the tree for children at or beyond the parent's centre depth; a nearer child can measure larger, so the frontier's size bound is approximate — determinism, the budget (`entries ≤ B`), and bit-exactness do not depend on it, and the greedy's detail choice carries the exception. Geometry boxes likewise nest — each group's contains its children's — and take no part in this ordering.
 
 Each entry carries its kind, its identity — the flat-array node index, resolved to a config identity through the connect-time manifest (§10.3, Decision 11) — and a **transition flag** (appeared, removed, or expanded) relative to the viewer's previous frame; `expanded` is internal to visibility and surfaces on the wire as appeared entries for the newly revealed devices (§9.3, §10.4). Values are not resolved by the query: the encoder maps each index to its source at encode time (§10.3). The result is deterministic given `(topology, state, camera, selection)` and the viewer's prior expansion state (§9.3), with `entries ≤ B`; the per-viewer frontier is bounded by `B`. The viewer's selected object (FR-VS-02) is force-included every frame, taking one of the `B` entry slots.
 
 ### 9.3 Anti-Flicker
 
-**Size hysteresis:** enter detailed view at 120 px, exit at 100 px (FR-VS-06, R7). A group whose LOD box is degenerate has no measurable size and is not subject to this band (Decision 21).
+**Size hysteresis:** enter detailed view at 10%, exit at 8% (FR-VS-06, R7) — fractions of the screen height. A group whose LOD box is degenerate has no measurable size and is not subject to this band (Decision 21).
 
 **Budget hysteresis:** the entry budget cuts the frontier independently of on-screen size, so a group near the budget edge can flip between blended and detailed as unrelated scene contents change — frontier ordering cannot absorb this. The running cut size therefore carries its own band: expansion is admitted while `entries < B`, but a node already expanded is retained until the cut falls below `B − Δ` (`Δ` defaults to 10% of `B`, §9.5), so the budget edge does not oscillate. The size and budget bands are independent and configurable.
 
@@ -619,8 +629,8 @@ Parameters that are not part of the topology (PRD-001 §8) live in an engine con
 | Parameter | Default | Requirement |
 | --- | --- | --- |
 | Entry budget `B` | 5,000 | FR-VS-07, K3 |
-| On-screen-size enter threshold | 120 px | FR-VS-06 |
-| On-screen-size exit threshold | 100 px | FR-VS-06 |
+| Size-threshold enter (screen-height fraction) | 10% | FR-VS-06 |
+| Size-threshold exit (screen-height fraction) | 8% | FR-VS-06 |
 | Budget hysteresis `Δ` | 10% of `B` | §9.3, Decision 19 |
 | Camera-context timeout | 1 s | FR-VS-08, Decision 19 |
 
@@ -714,13 +724,12 @@ Manifest (server → client, type = 1):          # in chunks, before the first f
   u8  bytes[byte_count]     # consecutive bytes of the resolved manifest
 
 CameraContext (client → server, type = 1):     # every frame
-  f32 position[3]
-  f32 forward[3]
-  f32 up[3]
-  u32 width
-  u32 height
-  f32 pixel_ratio
-  f32 fov
+  f32 position[3]           # metres, the world unit (§4.3)
+  f32 forward[3]            # unit vector, camera facing
+  f32 up[3]                 # unit vector, camera up axis (carries roll)
+  u32 width                 # viewport, CSS px — only the ratio is used (§9.1)
+  u32 height                # viewport, CSS px
+  f32 fov                   # effective vertical field of view, degrees (§11.2)
 
 InspectionTarget (client → server, type = 2):  # on selection change
   u32 node_index            # 0 = deselection
@@ -734,7 +743,7 @@ The client and demo target the building tier (~4,280 devices). Browser KPIs K6 (
 
 The client resolves instance ids to device positions and metric units from the resolved manifest (§4.6, FR-TD-09), so positions are never transmitted per reading.
 
-A group entry's transform comes from the manifest's resolved **geometry box** (§4.6, FR-TD-09) — so what is drawn is what is culled. The LOD decision uses the LOD box instead (§9.2), so expansion still follows the spread of a group's devices (Decision 22). Shape and marker size are client-side rendering choices, with a minimum visible size for a degenerate box; a group's AABB is a bounding box, not a model of the object.
+A group entry's transform comes from the manifest's resolved **geometry box** (§4.6, FR-TD-09) — so what is drawn is what is culled. The LOD decision uses the LOD box instead (§9.2), so expansion still follows the spread of a group's devices (Decision 22). Shape and marker size are client-side rendering choices, with a minimum visible size for a degenerate box — a floor in **device pixels**, the client's own device pixel ratio applied at raster time, so a zero-extent box never disappears at any zoom; a group's AABB is a bounding box, not a model of the object.
 
 ### 11.1 Rendering
 
@@ -744,7 +753,7 @@ A group entry's transform comes from the manifest's resolved **geometry box** (�
 
 ### 11.2 Camera Publisher
 
-Each frame the client sends its camera pose (position and orientation) and screen geometry to the server (FR-CD-06), closing the camera-feedback loop that enables server-side culling and blending.
+Each frame the client sends its camera pose (position and orientation) and screen geometry to the server (FR-CD-06), closing the camera-feedback loop that enables server-side culling and blending. The published field of view is the **effective** vertical field of view the frame is projected under — any client zoom already applied — in degrees, together with the viewport size the frame was projected against; the value is a client-side rendering setting, published every frame, and the engine assumes no fixed field of view.
 
 ### 11.3 Picking
 
@@ -842,7 +851,7 @@ Named budgets sum to ≤ 7.5 ms; overruns do not cascade across frames. K2 measu
 | Composition | Per-group channel contributions, same-reduction joins, mixed-unit rejection, mean accumulators | K4 |
 | Attention | Limit-band mapping and absence levels vs a scalar reference; max-propagation property tests | FR-TD-11, FR-AG-06 |
 | Differential | Engine traversal/selection vs flat-list brute-force reference | R1 |
-| Selection | Exact-height heap refinement vs brute-force ranked cut | R5, K3, FR-VS-07 |
+| Selection | Exact-size heap refinement vs brute-force ranked cut | R5, K3, FR-VS-07 |
 | Hysteresis | Camera path across frames N and N+1: the enter/exit bands hold — no flicker between blended and detailed at the threshold; the budget band absorbs edge flips | FR-VS-06, R7 |
 | Boundary | Empty and device-less groups (accepted, pruned from the visible set, parents report the remaining contributions per FR-AG-04); degenerate groups (single device, coincident devices) expand with their parent; non-multiple-of-8 counts | R2 |
 | Degradation | Flat hierarchy (all devices under the root) returns a single blended entry within budget, with exact aggregates | R5, G2 |
@@ -894,6 +903,7 @@ The benchmark topology and its simulator configuration are produced by a **deter
 - **Metrics** (~3/device): `temp` (C), `vib` (mm/s), `power` (kW), each with ε, a freshness timeout, an absence level, and severity limits.
 - **Channels:** per level — for example a rack `rack_avg_temp` (mean, C) fed by its devices, a room `room_avg_temp` merging rack channels, and building and site merging upward, same reduction and explicit contributions.
 - **Positions:** deterministic grid — building along x, room on y (floor), racks on an x/z grid within a room, devices at small in-rack offsets.
+- **Camera context.** Camera paths report the field of view every frame as a publisher does (§11.2), following a fixed schedule across **30°–90°**, against a fixed viewport aspect (16:9); the schedule is recorded with the run (FR-BR-04), so the projected fractions driving K2 and K3 are reproducible across hosts while K2 is measured across the field-of-view range (§16.3); the fixed display (1920×1080, pixel ratio 1) calibrates the client-side raster measurements (K6, and K7 at the building tier).
 - **Reading rates:** PRD-001 §7.1's aggregate is normative for each tier — ~300,000 / ~150,000 / ~37,000 readings/s — and each tier's simulator profile writes it as `reading_rate` (§12); the per-instance rate is `global_eps` ÷ metric instances (~1/s at full and intermediate, ~2.9/s at building). No benchmark device type declares `reporting_interval_ms`, so offered EPS equals the tier's `global_eps`.
 - **Templates:** the libraries are identical across tiers and supply `rack_a` for rack groups and a device type entry for each device kind, so every device resolves one and each generated topology stays compact (Decision 9, Decision 20).
 
@@ -904,7 +914,7 @@ The benchmark topology and its simulator configuration are produced by a **deter
 - Client-side KPIs K6 and K7 are measured in the demo application at the building tier (~4,280 devices), not at the 100k tier.
 - End-to-end freshness (K11) is measured in the demo application with instrumented timestamps at the building scale — from a reading accepted through the rendered change, including the frame-clock quantisation.
 - Stress: ≥ 300,000 EPS for ≥ 30 min (K1).
-- Visibility latency: p99 ≤ 1.5 ms per viewer per 60 Hz frame at 100k, across camera poses including max zoom-out, engine instrumentation only (K2).
+- Visibility latency: p99 ≤ 1.5 ms per viewer per 60 Hz frame at 100k, across camera poses including max zoom-out, engine instrumentation only (K2) — measured across the field-of-view range, since the projected fraction varies with it.
 - Boot: ≤ 30 s from topology file to fully loaded and serving at 100k devices (K8).
 - Concurrent-session run: ≥ 10 browser sessions at 60 Hz at the full-scale tier (100,000 devices); ≤ 50% aggregate server CPU — engine-process CPU across all its threads, summed and expressed as a fraction of total host capacity, taken as the mean over the steady-state window with the maximum reported alongside (K10); per-client egress within K5.
 - Micro-benchmark: per-channel group aggregation (K9). The measured channel is constructed with 1,000 contributing readings, since no channel of the benchmark topology reaches that fan-in — the widest is a rack channel at ~63 devices × 1 same-unit metric each ≈ 63 (§16.2, FR-AG-02) — so the ceiling is exercised synthetically, not sampled from the topology.
@@ -939,7 +949,7 @@ Each decision states its decision in the first sentence, gives labelled aspects 
 
 | # | Decision | Recorded in |
 | --- | --- | --- |
-| 1 | One hierarchy serves both visibility and aggregation; frontier ordered by exact projected height | §2, §4, §6.1, §9.2–§9.4, §15 |
+| 1 | One hierarchy serves both visibility and aggregation; frontier ordered by exact projected size | §2, §4, §6.1, §9.2–§9.4, §15 |
 | 2 | Aggregation by accumulator propagation over per-group channels | §8 |
 | 3 | Stateful per-viewer change suppression | §10 |
 | 4 | Per-group local channels — identity and policy — with explicit contributions | §2, §3.1, §4, §5, §6.1, §7, §8 |
@@ -960,16 +970,16 @@ Each decision states its decision in the first sentence, gives labelled aspects 
 | 19 | Engine configuration defaults: budget hysteresis Δ = 10% of `B`; camera-context timeout 1 s | §9.1, §9.3, §9.5 |
 | 20 | Type templates and policy overrides: the type libraries supply a device's `metrics` and a group's `channels` with their `policy`; a node refines policy fields per key; expanded at boot before validation | §4, §16.2 |
 | 21 | Group retention and degenerate LOD boxes: prune groups with no device descendant bottom-up; degenerate groups bypass the size threshold | §4, §5, §6.1, §9.2, §9.3, §15 |
-| 22 | Declared group extents: optional per-group `aabb` with boot containment; geometry box (declared or derived) for culling and drawing, LOD box (derived) for projected height | §4, §5, §6.1, §6.2, §9.2, §11, §15 |
+| 22 | Declared group extents: optional per-group `aabb` with boot containment; geometry box (declared or derived) for culling and drawing, LOD box (derived) for projected size | §4, §5, §6.1, §6.2, §9.2, §11, §15 |
 | 23 | Simulator operating parameters: rates and value models in a unit-keyed simulator profile — the simulator's configuration file — versioned with the report | §12 |
 
 ### Decision 1 — Frontier ordering
 
-The frontier is a fixed-capacity **max-heap keyed on exact projected on-screen height**, with the node index as the terminal tie-break.
+The frontier is a fixed-capacity **max-heap keyed on exact projected size**, with the node index as the terminal tie-break.
 
 - **Structure.** The hierarchy is the single structure driving visibility and aggregation; the state table is a separate flat value store aligned to leaf order. A straightforward index of device positions cannot answer *both* "what is on screen?" and "what are this group's aggregate channel values?" within budget, so the index mirrors the semantic hierarchy and carries bounding volumes — one traversal yields visibility and aggregation together.
-- **Primary key.** Exact height is the primary key.
-- **Ordering function.** Ordering is a pure function of `(topology, state, camera, selection)`; the node index is a terminal tie-break for equal heights only. The index is immutable after boot, so the frontier holds node references and per-frame heights.
+- **Primary key.** Exact projected size is the primary key.
+- **Ordering function.** Ordering is a pure function of `(topology, state, camera, selection)`; the node index is a terminal tie-break for equal sizes only. The index is immutable after boot, so the frontier holds node references and per-frame sizes.
 - **Bounds.** Heap operations are `O(log B)`; the frontier is bounded by `B` ≈ 5,000.
 - **Budget-edge flicker.** Handled by the entry-count hysteresis in §9.3.
 - **Alternatives rejected.** Bucketed ordering with a bucket size-error bound or a bucket-width parameter; a flat device-position index serving visibility beside a separate aggregation structure — it cannot answer both queries within budget.
@@ -1054,7 +1064,7 @@ Canonical child order is the order in which children are declared in the config,
 - **Child enumeration.** Node shape: `subtree_size` (`u32`, node count) and `child_count` (`u32`). `first_child = index + 1` (parent-first preorder over emitted nodes; excluded groups never intervene) and `next_sibling = sibling + subtree_size` are derived, not stored. `deg(v)` is O(1), so the expansion-budget check `entries − 1 + deg(v) ≤ B` is O(1) even for a flat hierarchy with ~100k children; enumeration is O(deg) and only runs when `deg ≤ B`.
 - **Subtree-size units.** `subtree_size` is a node count.
 - **Invariant.** Boot checks that `child_count` equals the emitted direct children and that `first_child = index + 1`; the contiguity scan confirms `subtree_size`.
-- **Alternatives rejected.** Order derived from ids, map iteration, or filesystem order; a stored per-node device-count extent — aggregation reads per-channel offset lists (Decision 7), and visibility uses projected height and the entry budget.
+- **Alternatives rejected.** Order derived from ids, map iteration, or filesystem order; a stored per-node device-count extent — aggregation reads per-channel offset lists (Decision 7), and visibility uses projected size and the entry budget.
 
 ### Decision 9 — Config schema
 
@@ -1095,7 +1105,7 @@ The wire key is the server's flat-array node index; the client maps it to config
 
 The hierarchy build is a single sequential pass over the resolved manifest (§4.6), and validation runs fail-fast in seven stages before serving.
 
-- **Leaf AABB.** A leaf's AABB is the device position (degenerate point); frustum tests are inclusive, and the brute-force reference uses the identical point test. There is no AABB inflation. A leaf's projected height is degenerate, which is harmless: a device leaf is terminal by kind, and the size threshold only decides group blending.
+- **Leaf AABB.** A leaf's AABB is the device position (degenerate point); frustum tests are inclusive, and the brute-force reference uses the identical point test. There is no AABB inflation. A leaf's projected size is degenerate, which is harmless: a device leaf is terminal by kind, and the size threshold only decides group blending.
 - **Positions.** Non-finite positions (NaN/Inf) are rejected at boot; coincident positions are legal and separated by the node-id tie-break.
 - **Build parallelism.** The layout DFS is sequential — O(N) and not the K8 bottleneck. K8 is treated as a parse, materialization, and validation budget.
 - **Validation.** Checks run across the raw topology and its manifest in seven stages — schema (FR-TD-08), structural (FR-TD-07), device/metric (FR-TD-04), channels (FR-TD-05), contributions (FR-TD-06/08), limits/absence (FR-TD-11/08), post-build invariants (§6.2) — and are fail-fast: the first fault aborts boot with a structured diagnostic `{code, node id, metric label / channel id, message}`.
@@ -1181,13 +1191,13 @@ A group is retained in the index only if it has at least one device descendant, 
 
 - **Pruning.** A group with no device descendant — empty, or inherited from a type with nothing attached — is accepted (FR-TD-07) and pruned, so every retained group's LOD box is the union of a non-empty set.
 - **Contribution sources.** Wiring from a pruned child group never enters the manifest, so every contribution source the build records corresponds to a recorded channel definition; the pruned group's channels are valueless by construction (FR-AG-04), its accumulators are never allocated, and its attention is normal, so the parent's maximum is unchanged.
-- **Degenerate sizing.** A group whose LOD box is degenerate projects to 0 px at every distance, so the size threshold would blend it forever; exempting it restores FR-CD-04's bring-into-view path, while the entry budget and the budget band (§9.3) still bound it.
+- **Degenerate sizing.** A group whose LOD box is degenerate has zero projected size at every distance, so the size threshold would blend it forever; exempting it restores FR-CD-04's bring-into-view path, while the entry budget and the budget band (§9.3) still bound it.
 - **Sharing.** Pruning and sizing are functions of the config, the camera, and the expansion state (§9.3), applied identically by the engine and the brute-force reference (§6.3).
 - **Alternatives rejected.** Nominal AABB inflation — it requires a magic extent and a matching rule in the brute-force reference, and it contradicts the no-inflation rule for leaves (Decision 12); rejecting device-less groups — FR-TD-07 requires that groups may be empty; emitting pruned groups — their LOD box is the union of an empty set and they stream no values.
 
 ### Decision 22 — Declared group extents
 
-A group may declare an `aabb` — two corner points that contain every device position and every declared `aabb` in its subtree. Each node keeps two boxes: a **geometry box** (the declared `aabb`, else the union of its children's geometry boxes and device positions) for frustum tests and for the transform the client draws, and an **LOD box** (always the union of the node's devices' positions) for projected on-screen height.
+A group may declare an `aabb` — two corner points that contain every device position and every declared `aabb` in its subtree. Each node keeps two boxes: a **geometry box** (the declared `aabb`, else the union of its children's geometry boxes and device positions) for frustum tests and for the transform the client draws, and an **LOD box** (always the union of the node's devices' positions) for projected size.
 
 - **Why two boxes.** Geometry governs culling and rendering, so the drawn marker and the culled box are the same box and markers do not pop at frustum edges. LOD governs expansion, which follows the spread of a group's devices: that is what FR-VS-05 measures (`too small on screen to show its individual devices`) and what FR-VS-07's largest-on-screen ranking spends the entry budget on.
 - **Validation.** The field is optional, so a topology that declares none boots unchanged. When present, a boot check places every descendant device position and every descendant declared `aabb` inside it, which makes culling on that box incapable of hiding an in-view device or an in-view descendant extent (FR-TD-07, §6.2).

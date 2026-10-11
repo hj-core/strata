@@ -4,9 +4,9 @@
 | --- | --- |
 | Document ID | PRD-001 |
 | Title | Server-Side Hierarchical Spatial Filtering Engine for 3D Digital Twin Visualization |
-| Version | 0.5.0 |
+| Version | 0.7.0 |
 | Status | Draft |
-| Last Updated | 2026-10-08 |
+| Last Updated | 2026-10-10 |
 | Owner | Project maintainer |
 | Related documents | Downstream: TDD-001 (Technical Design), PLN-001 (Master Execution Sequence). This document is self-contained. |
 
@@ -138,12 +138,12 @@ Validation conditions for FR-TD-08:
 
 | ID | Requirement | Priority | Source |
 | --- | --- | --- | --- |
-| FR-VS-01 | The system shall accept each viewer's camera pose — position and orientation — and screen geometry (width, height, pixel ratio, field of view) every frame. | M | G2 |
+| FR-VS-01 | The system shall accept each viewer's camera pose — position and orientation — and screen geometry (width, height, field of view) every frame. | M | G2 |
 | FR-VS-02 | The system shall accept each viewer's selected object identity on selection change and, while selected, include that object's current values in the viewer's stream every frame until deselection. | M | G2 |
 | FR-VS-03 | For each viewer, the system shall determine which devices and groups are visible from the viewer's camera, within the visibility query latency target (K2). | M | G2, K2, R5 |
 | FR-VS-04 | For each viewer, the visibility result shall be a set of individual device instances and blended group entries. | M | G2 |
-| FR-VS-05 | When a group is too small on screen to show its individual devices, the system shall show the group's aggregate values instead; the size threshold and its hysteresis are configured per FR-VS-06. | M | G2 |
-| FR-VS-06 | The system shall avoid visible flicker when a group crosses the on-screen-size threshold; the threshold band is configurable (default enter 120 px, exit 100 px). | M | G2, R7 |
+| FR-VS-05 | When a group is too small on screen to show its individual devices — measured by the group's screen-height fraction (FR-VS-06) — the system shall show the group's aggregate values instead; the size threshold and its hysteresis are configured per FR-VS-06. | M | G2 |
+| FR-VS-06 | The system shall avoid visible flicker when a group crosses the size threshold; the threshold band is configurable (default enter 10%, exit 8%, measured as the group's screen-height fraction — the fraction of the screen height the group's projected extent occupies). | M | G2, R7 |
 | FR-VS-07 | The system shall present no more than 5,000 active entries per viewer per frame in the worst case (K3), where an entry is an individual device instance or a blended group entry. When the visible region would exceed that bound, the system shall represent the coarser groups by their aggregate channel values, showing in detail those groups with the largest on-screen size. | M | G2, K3 |
 | FR-VS-08 | When a viewer's camera context is absent or late, the system shall reuse the last known context until a configurable timeout, after which it shall hold that viewer's updates. | M | G2 |
 
@@ -231,10 +231,10 @@ The engine's byte-level representation of the same values, including exact wire 
 | Interface | Direction | Content |
 | --- | --- | --- |
 | Topology config | file → engine; engine → resolved manifest → engine / simulator / client | Site hierarchy, device positions, per-device metric labels and per-metric units, noise thresholds, freshness timeouts, and the containing group's channels each metric contributes to; per-group aggregate channel definitions and per-group channel contributions; per-metric and per-channel severity limits and per-metric absence severity levels. Every group has an attention value, which is not configurable. The engine materializes this interface into a resolved manifest — every node fully expanded, with metric and channel settings applied — which is the form all three parties consume; identities remain reproducible from an unchanged topology (FR-TD-09). |
-| Engine configuration | file → engine | Visibility/LOD parameters: on-screen-size enter/exit thresholds (FR-VS-06) and camera-context timeout (FR-VS-08). |
+| Engine configuration | file → engine | Visibility/LOD parameters: screen-height-fraction enter/exit thresholds (FR-VS-06) and camera-context timeout (FR-VS-08). |
 | Simulator configuration | file → simulator | Reading rates per tier (FR-BR-05); value models covering noise, steps, spikes, and offline transitions, and the parameters that make traces deterministic (FR-CD-07, FR-BR-04). |
 | Telemetry ingest | simulator / devices → engine | Device identity and metric values at the configured rate. |
-| Camera context | browser → engine, every frame | Camera pose (position and orientation), screen width/height, pixel ratio, field of view. |
+| Camera context | browser → engine, every frame | Camera pose (position and orientation), screen width/height, field of view. |
 | Inspection target | browser → engine, on selection change | Identity of the rendered object selected for inspection, and deselection. |
 | Streamed updates | engine → browser, every frame | Changes, availability, and snapshots for visible device instances and blended group entries. Every entry's complete value set is defined (a device instance's metrics or a group entry's channels), plus the entry's attention value; transmission follows FR-TR-02 — the full value set on first send or snapshot, changes thereafter. |
 
