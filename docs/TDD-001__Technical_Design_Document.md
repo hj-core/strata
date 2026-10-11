@@ -921,7 +921,7 @@ The benchmark topology and its simulator configuration are produced by a **deter
 - Client-side KPIs K6 and K7 are measured in the demo application at the building tier (~4,280 devices), not at the 100k tier.
 - End-to-end freshness (K11) is measured in the demo application with instrumented timestamps at the building scale — from a reading accepted through the rendered change, including the frame-clock quantisation.
 - Stress: ≥ 300,000 EPS for ≥ 30 min (K1).
-- Visibility latency: p99 ≤ 1.5 ms per viewer per 60 Hz frame at 100k, across camera poses including max zoom-out, engine instrumentation only (K2) — measured across the field-of-view range, since the projected fraction varies with it.
+- Visibility latency: p99 ≤ 1.5 ms per viewer per 60 Hz frame at 100k, across camera poses including max zoom-out (the 90° end of the §16.2 schedule), engine instrumentation only (K2) — measured across the field-of-view range, since the projected fraction varies with it.
 - Boot: ≤ 30 s from topology file to fully loaded and serving at 100k devices (K8).
 - Concurrent-session run: ≥ 10 browser sessions at 60 Hz at the full-scale tier (100,000 devices); ≤ 50% aggregate server CPU — engine-process CPU across all its threads, summed and expressed as a fraction of total host capacity, taken as the mean over the steady-state window with the maximum reported alongside (K10); per-client egress within K5.
 - Micro-benchmark: per-channel group aggregation (K9). The measured channel is constructed with 1,000 contributing readings, since no channel of the benchmark topology reaches that fan-in — the widest is a rack channel at ~63 devices × 1 same-unit metric each ≈ 63 (§16.2, FR-AG-02) — so the ceiling is exercised synthetically, not sampled from the topology.
