@@ -4,9 +4,9 @@
 | --- | --- |
 | Document ID | PRD-001 |
 | Title | Server-Side Hierarchical Spatial Filtering Engine for 3D Digital Twin Visualization |
-| Version | 0.7.0 |
+| Version | 0.8.0 |
 | Status | Draft |
-| Last Updated | 2026-10-10 |
+| Last Updated | 2026-10-11 |
 | Owner | Project maintainer |
 | Related documents | Downstream: TDD-001 (Technical Design), PLN-001 (Master Execution Sequence). This document is self-contained. |
 
@@ -74,11 +74,11 @@ All three personas belong to the **project**: the Operator reaches the product t
              ▼
  BROWSERS: draw at 60 FPS, click-to-inspect
              │
-             ├─ camera pose + screen geometry, every frame ─► server
+             ├─ camera pose + viewport geometry, every frame ─► server
              └─ selected object id, on selection change ─► server
 ```
 
-Each browser sends its camera pose (position and orientation) and screen geometry to the server every frame, and the identity of its selected object on selection change, closing the feedback loop that drives server-side visibility selection, blending, and targeted inspection (FR-VS-01, FR-VS-02, FR-CD-04, FR-CD-06). The engine parses the topology definition once and materializes it into a resolved manifest that the engine, the simulator, and the client all consume, so device and metric identities, positions, units, and thresholds align (FR-TD-09).
+Each browser sends its camera pose (position and orientation) and viewport geometry to the server every frame, and the identity of its selected object on selection change, closing the feedback loop that drives server-side visibility selection, blending, and targeted inspection (FR-VS-01, FR-VS-02, FR-CD-04, FR-CD-06). The engine parses the topology definition once and materializes it into a resolved manifest that the engine, the simulator, and the client all consume, so device and metric identities, positions, units, and thresholds align (FR-TD-09).
 
 The benchmark harness, the fixed benchmark topology, and the benchmark report complete the deliverables (see §13).
 
@@ -138,7 +138,7 @@ Validation conditions for FR-TD-08:
 
 | ID | Requirement | Priority | Source |
 | --- | --- | --- | --- |
-| FR-VS-01 | The system shall accept each viewer's camera pose — position and orientation — and screen geometry (width, height, field of view) every frame. | M | G2 |
+| FR-VS-01 | The system shall accept each viewer's camera pose — position and orientation — and viewport geometry (width, height, field of view) every frame. | M | G2 |
 | FR-VS-02 | The system shall accept each viewer's selected object identity on selection change and, while selected, include that object's current values in the viewer's stream every frame until deselection. | M | G2 |
 | FR-VS-03 | For each viewer, the system shall determine which devices and groups are visible from the viewer's camera, within the visibility query latency target (K2). | M | G2, K2, R5 |
 | FR-VS-04 | For each viewer, the visibility result shall be a set of individual device instances and blended group entries. | M | G2 |
@@ -165,7 +165,7 @@ Validation conditions for FR-TD-08:
 | FR-CD-03 | The client shall colour each rendered object by one selected value — a metric for a device instance, a channel for a group entry, or the object's attention value — defaulting to the attention value on the fixed severity scale, and allowing the viewer to change the selection. The attention default shall provide consistent comparison across all rendered objects; selection of a specific metric or channel is per-object inspection. | M | G2, K6 |
 | FR-CD-04 | The client shall let a viewer pick any rendered object — an individual device instance or a blended group entry — and shall publish the selected identity and each deselection to the server. Only currently rendered objects can be picked; a device that is not rendered must be brought into view first. | M | G2 |
 | FR-CD-05 | While an object is selected, the client shall display its current values and their units plus its availability status, refreshing every frame regardless of how little they change, and shall return to normal streaming when deselected. | M | G2 |
-| FR-CD-06 | The client shall publish its camera pose (position and orientation) and screen geometry every frame. | M | G2 |
+| FR-CD-06 | The client shall publish its camera pose (position and orientation) and viewport geometry every frame. | M | G2 |
 | FR-CD-07 | A synthetic telemetry simulator shall emit device-level readings for the shared topology at configurable rates up to full-scale load, with per-metric value models including noise, steps, spikes, and offline transitions, and deterministic traces for reproducible benchmarks. | M | G5 |
 | FR-CD-08 | A demo application shall integrate simulator → engine → browser into an end-to-end runnable showcase at the building scale (~4,280 devices). | M | G5 |
 | FR-CD-09 | The engine and demonstration packages shall surface status, errors, and run metrics sufficient to diagnose a failing run. | M | G5 |
@@ -234,7 +234,7 @@ The engine's byte-level representation of the same values, including exact wire 
 | Engine configuration | file → engine | Visibility/LOD parameters: screen-height-fraction enter/exit thresholds (FR-VS-06) and camera-context timeout (FR-VS-08). |
 | Simulator configuration | file → simulator | Reading rates per tier (FR-BR-05); value models covering noise, steps, spikes, and offline transitions, and the parameters that make traces deterministic (FR-CD-07, FR-BR-04). |
 | Telemetry ingest | simulator / devices → engine | Device identity and metric values at the configured rate. |
-| Camera context | browser → engine, every frame | Camera pose (position and orientation), screen width/height, field of view. |
+| Camera context | browser → engine, every frame | Camera pose (position and orientation), viewport width/height, field of view. |
 | Inspection target | browser → engine, on selection change | Identity of the rendered object selected for inspection, and deselection. |
 | Streamed updates | engine → browser, every frame | Changes, availability, and snapshots for visible device instances and blended group entries. Every entry's complete value set is defined (a device instance's metrics or a group entry's channels), plus the entry's attention value; transmission follows FR-TR-02 — the full value set on first send or snapshot, changes thereafter. |
 

@@ -4,9 +4,9 @@
 | --- | --- |
 | Document ID | TDD-001 |
 | Title | Server-Side Hierarchical Spatial Filtering Engine — Technical Design |
-| Version | 0.25.0 |
+| Version | 0.26.0 |
 | Status | Draft |
-| Last Updated | 2026-10-10 |
+| Last Updated | 2026-10-11 |
 | Owner | Project maintainer |
 | Related documents | Upstream: PRD-001 (Product Requirements). Downstream: PLN-001 (Master Execution Sequence). |
 
@@ -62,7 +62,7 @@ PRD-001 §9 is authoritative for these constraints.
 The system comprises a server process and a browser client, supported by three additional programs: the simulator, the demo application, and the benchmark harness.
 
 - **Server (Rust).** Owns the state table and the hierarchical spatial index, and runs every stage of the pipeline: telemetry ingest, index build, shared aggregation, per-viewer visibility query, per-viewer encode, and WebSocket transport. All heavy work happens here, once per frame, shared across viewers (Decision 18).
-- **Browser client (Three.js).** Renders the entries the server selects, using an `InstancedMesh` over a pre-allocated VBO, and reports back its camera pose and screen geometry every frame, and its selected object and each deselection on change (Decision 18).
+- **Browser client (Three.js).** Renders the entries the server selects, using an `InstancedMesh` over a pre-allocated VBO, and reports back its camera pose and viewport geometry every frame, and its selected object and each deselection on change (Decision 18).
 - **Supporting programs.** The simulator (Rust binary) feeds ingest; the demo application (Vite/TS) wires simulator → engine → browser; the benchmark harness measures the KPIs (§16). The stack for all three is fixed by Decision 18.
 
 Component responsibilities and PRD-001 coverage are given in §3.1. The order in which the stages execute — the boot path, the ingest path, the frame path, and both client feedback loops — is given as a numbered sequence in §3.2.
@@ -100,7 +100,7 @@ Three paths make up the pipeline: the **boot path**, which runs once before serv
 **Frame path — once per 60 Hz cycle.** The path is paced on an absolute schedule: with ≤ 7.5 ms of stage work (§13) each frame completes inside its 16.67 ms slot and overruns do not cascade, so consecutive frame starts are at most 17 ms apart on millisecond ticks. A frame that overruns its slot does not push the deadlines after it: missed deadlines are dropped rather than queued, so one late frame widens at most one gap. The **frame clock** advances exactly once per frame, at this opening; every step below tests availability against that one value, within `freshness_ms` of its advance.
 
 3. **Aggregation** reads the state table (metric values) and the index (the boot-compiled contribution plan, Decision 10) — and nothing per-viewer — then writes each group's channels and attention into the write buffer and swaps buffers to publish the frame's snapshot (§8).
-4. **Camera context** — each client sends its camera pose and screen geometry every frame, and its selected node index on selection change; the transport passes both to the visibility engine (§10.5).
+4. **Camera context** — each client sends its camera pose and viewport geometry every frame, and its selected node index on selection change; the transport passes both to the visibility engine (§10.5).
 5. **Visibility** reads the index (geometry boxes, LOD boxes, subtree sizes, child counts), the camera context from step 4, and the per-group availability bit published with step 3's snapshot — and no values — then produces that viewer's bounded entry cut of at most `B` entries (§9.2).
 6. **Encode** — per viewer, reads three inputs: the entry cut from step 5 (which entries exist), the aggregate snapshot from step 3 (a group entry's channel values), and the state table directly (a device entry's metric values via the leaf's `row base`, §5.2). It converts each value to its slot's wire width — f16, or f32 for `sum`/`count` — applies the per-value ε filter (metric ε from the metric-def array, channel ε from the channel-def array, §5), tests device-slot availability against the frame clock while a group entry's no-value channels come from the step-3 snapshot, suppresses unchanged slots against the last-sent baseline, and sends the selected object at full fidelity (§10.2, §10.3).
 7. **Transport** writes one WebSocket binary frame for that viewer (§10.4); the session baseline advances only on an actual socket write (§10.2, §10.3).
@@ -110,7 +110,7 @@ Steps 3 and 5 are independent branches: they share only the frame clock and the 
 
 **Feedback and session paths**
 
-- **Camera loop:** step 4 → step 5, every frame. Without it the visibility query has no screen geometry and cannot size the LOD threshold (FR-VS-01).
+- **Camera loop:** step 4 → step 5, every frame. Without it the visibility query has no viewport geometry and cannot size the LOD threshold (FR-VS-01).
 - **Selection loop:** step 4 → step 5 (force-include the selected object) and → step 6 (stream its values every frame until deselection), on selection change only (FR-VS-02).
 - **Session start:** on (re)connect the transport first sends the resolved manifest (§10.5) and a full visible keyframe (FR-TR-03), after which the normal frame path — steps 3 through 8 — resumes carrying incremental frames.
 
@@ -573,15 +573,17 @@ Each group carries a **reserved unitless attention channel** (the group's attent
 
 ### 9.1 Camera Context Inputs
 
-Per viewer, per frame: camera pose (position and orientation), screen width/height, field of view (FR-VS-01). The pose and field of view, with the viewport aspect — `width / height` — drive culling; the field of view also sets the size threshold's per-frame conversion; width and height enter only through that aspect. The client's device pixel ratio is not part of the context: the screen-height fraction is identical in device and CSS pixels (§9.2), so it never crosses the wire, and the client's raster floor (§11) applies it where it originates. If the context is absent or late, the last known context is reused until a timeout, after which that viewer's stream is held (FR-VS-08).
+Per viewer, per frame: camera pose (position and orientation), viewport width/height, field of view (FR-VS-01). The width and height are the viewport the scene renders into — the canvas rectangle, in CSS pixels, not the display. The pose and field of view, with the viewport aspect — `width / height` — drive culling; the field of view also sets the size threshold's per-frame conversion; width and height enter only through that aspect. The client's device pixel ratio is not part of the context: the screen-height fraction is identical in device and CSS pixels (§9.2), so it never crosses the wire, and the client's raster floor (§11) applies it where it originates. If the context is absent or late, the last known context is reused until a timeout, after which that viewer's stream is held (FR-VS-08).
 
-**Example context.** Camera position `(0.0, 3.0, 12.0)` m, `forward (0.0, 0.0, -1.0)`, `up (0.0, 1.0, 0.0)`; screen `2560 × 1440`; field of view `60°`. The pose supplies the frustum planes and each box's centre depth `z` and screen-vertical extent `Δy`; the screen contributes only its aspect — 1.778 — so the horizontal field of view is `2 · atan(tan 30° × 1.778) ≈ 91.5°`; the client's pixel ratio `2.0` alters no engine value — only the §11 floor uses it, client-side at raster time; the field of view sets the frustum's vertical extent and §9.2's per-frame conversion.
+**Example context.** Camera position `(0.0, 3.0, 12.0)` m, `forward (0.0, 0.0, -1.0)`, `up (0.0, 1.0, 0.0)`; viewport `2560 × 1440`; field of view `60°`.
 
 ### 9.2 Algorithm
 
 The query produces a per-viewer, per-frame **visibility result**: a bounded list of *entries*, each either a device instance or a blended group entry. It selects a **cut** through the visible hierarchy — the set of nodes that each become one entry — under the entry budget (R5, K3, FR-VS-07). Values are not resolved here; the encoder reads them from the state table and aggregate buffers (§10).
 
-The frontier (the current cut) is held in a **max-heap keyed on exact projected size**, not in a traversal stack, so selection is best-first among frontier nodes: the largest node in the frontier is expanded first, regardless of its depth or position in the array. The heap is a **fixed-capacity, per-viewer scratch buffer**, reused every frame and sized to the entry budget `B` (the frontier can never exceed `B`). The index (node indices, layout, AABBs) is immutable after boot (§5), so the heap carries only node references and per-frame sizes; each node enters the frontier at most once per query.
+**Culling.** The frustum comes from the §9.1 camera context — pose, vertical field of view, and aspect; a node is visible when its **geometry box** intersects it. The test is inclusive at the boundary, a leaf's box is its device position — a point — and the §6.3 reference applies the identical point test to every device position, so the two visible device-leaf sets compare exactly. A rejected parent prunes its whole subtree: a parent's geometry box contains its children's (§6.2).
+
+The frontier (the current cut) is held in a **max-heap keyed on exact projected size** (defined below), not in a traversal stack, so selection is best-first among frontier nodes: the largest node in the frontier is expanded first, regardless of its depth or position in the array. The heap is a **fixed-capacity, per-viewer scratch buffer**, reused every frame and sized to the entry budget `B` (the frontier can never exceed `B`). The index (node indices, layout, AABBs) is immutable after boot (§5), so the heap carries only node references and per-frame sizes; each node enters the frontier at most once per query.
 
 **Projected size** — the screen-height fraction of FR-VS-06 — is the fraction of the screen height the node's **LOD box** — the union of its devices' positions (Decision 22) — occupies, computed in f32 from the box's eight corners at that box's centre depth under the §9.1 camera context. The frontier heap is keyed on the rational `Δy / z` — the screen-vertical extent of the box's eight corners (rise along the camera's up axis) over the centre depth — monotone in the projected size; the §9.3 bands are compared per frame as `Δy / z ≥ 2 · f₀ · tan(V / 2)`, with f₀ the band default of §9.5 and V the camera's vertical field of view. The engine and the brute-force reference compute the identical value, so the frontier's total order is reproducible (§6.3).
 
@@ -603,7 +605,7 @@ Worked example: a LOD box 1.0 m tall at `z = 8` m under `V = 60°` — `f = 1 / 
 
 A child's LOD box is contained by its parent's LOD box, so projected size is monotone down the tree for children at or beyond the parent's centre depth; a nearer child can measure larger, so the frontier's size bound is approximate — determinism, the budget (`entries ≤ B`), and bit-exactness do not depend on it, and the greedy's detail choice carries the exception. Geometry boxes likewise nest — each group's contains its children's — and take no part in this ordering.
 
-Each entry carries its kind, its identity — the flat-array node index, resolved to a config identity through the connect-time manifest (§10.3, Decision 11) — and a **transition flag** (appeared, removed, or expanded) relative to the viewer's previous frame; `expanded` is internal to visibility and surfaces on the wire as appeared entries for the newly revealed devices (§9.3, §10.4). Values are not resolved by the query: the encoder maps each index to its source at encode time (§10.3). The result is deterministic given `(topology, state, camera, selection)` and the viewer's prior expansion state (§9.3), with `entries ≤ B`; the per-viewer frontier is bounded by `B`. The viewer's selected object (FR-VS-02) is force-included every frame, taking one of the `B` entry slots.
+Each entry carries its kind and its identity — the flat-array node index, resolved to a config identity through the connect-time manifest (§10.3, Decision 11); a group entry that expands also carries the internal `expanded` transition relative to the viewer's prior expansion state (§9.3); the wire transitions appeared and removed are assigned at encode time, against the last written frame (§10.3, §10.4), and `expanded` surfaces on the wire as appeared entries for the newly revealed devices. Values are not resolved by the query: the encoder maps each index to its source at encode time (§10.3). The result is deterministic given `(topology, state, camera, selection)` and the viewer's prior expansion state (§9.3), with `entries ≤ B`; the per-viewer frontier is bounded by `B`. The viewer's selected object (FR-VS-02) is force-included every frame, taking one of the `B` entry slots.
 
 ### 9.3 Anti-Flicker
 
@@ -705,7 +707,7 @@ Frame (type = 0):
 ```
 
 - A **device entry**'s value slots are its metric instances; a **group entry**'s are its local channels; slot order is the config order (Decision 7/9).
-- `appeared` entries carry every slot; `removed` entries carry none.
+- `appeared` entries carry the full entry — mask bytes with every bit set, then every slot; a `removed` entry carries its node index and entry flags alone — no mask bytes, no values, and its attention-present flag clear.
 - `appeared`/`removed` are the wire transitions; the visibility query's internal `expanded` transition (§9.2) is not a wire flag — it materialises as `appeared` entries for the newly revealed devices.
 - `changed_mask` bounds the payload to changed slots; an entry with nothing changed and no attention change is omitted entirely.
 - Attention is sent on change only (Decision 15).
@@ -753,7 +755,7 @@ A group entry's transform comes from the manifest's resolved **geometry box** (�
 
 ### 11.2 Camera Publisher
 
-Each frame the client sends its camera pose (position and orientation) and screen geometry to the server (FR-CD-06), closing the camera-feedback loop that enables server-side culling and blending. The published field of view is the **effective** vertical field of view the frame is projected under — any client zoom already applied — in degrees, together with the viewport size the frame was projected against; the value is a client-side rendering setting, published every frame, and the engine assumes no fixed field of view.
+Each frame the client sends its camera pose (position and orientation) and viewport geometry to the server (FR-CD-06), closing the camera-feedback loop that enables server-side culling and blending. The published field of view is the **effective** vertical field of view the frame is projected under — any client zoom already applied — in degrees, together with the viewport size the frame was projected against; the value is a client-side rendering setting, published every frame, and the engine assumes no fixed field of view.
 
 ### 11.3 Picking
 
@@ -857,7 +859,7 @@ Named budgets sum to ≤ 7.5 ms; overruns do not cascade across frames. K2 measu
 | Degradation | Flat hierarchy (all devices under the root) returns a single blended entry within budget, with exact aggregates | R5, G2 |
 | Invariant | Boot-time structural scan; declared-`aabb` containment; parent geometry ⊇ child geometry; geometry box ⊇ LOD box | R1, R3 |
 | Integration | Backend alpha / end-to-end | FR-CD-08 |
-| Transport | Wide-slot encode/decode round-trip: f32 `sum`/`count`, ε after width conversion, per-width unavailable marker, count above 65,504; manifest chunk reassembly across the 64 KB bound | FR-TR-02, FR-TR-03, K5 |
+| Transport | Wide-slot encode/decode round-trip: f32 `sum`/`count`, ε after width conversion, per-width unavailable marker, count above 65,504; `removed`-entry shape (node index and flags alone, no mask/values/attention); manifest chunk reassembly across the 64 KB bound | FR-TR-02, FR-TR-03, K5 |
 | Conformance | Golden manifest fixture: the engine's materialized parse of the raw topology matches an independent reference expansion — device_index, metric_slot, node order, and boxes agree | FR-TD-09 |
 | Ablation | Sibling ordering on/off (locality hypothesis) | R1 |
 | Ablation | SIMD on/off (aggregation and encode) | R2, K9 |
@@ -1135,7 +1137,7 @@ Sums use a fixed blocked-lane order with `W = 8`, so the scalar engine and the b
 The wire carries the absolute value in each slot's wire width — f16 for metric values and `mean`/`min`/`max` channels, f32 for `sum`/`count` channels — against a last-sent ε-suppression baseline, in a fixed little-endian frame layout, with a full keyframe on (re)connect and on-demand resync on a sequence gap.
 
 - **Value encoding.** The last-sent baseline is only the ε-suppression reference; the displayed value is exactly the last-sent value in its wire width, within ε plus that width's rounding of current.
-- **Frame layout.** Little-endian; a leading `u8 type`, then a header (sequence, flags, entry count), then entries keyed by node index (Decision 11), each with entry flags, a changed-slot mask, the included values in their wire widths, and attention only when changed. The canonical unavailable marker is the quiet NaN of the slot's own width (`0x7E00` for f16).
+- **Frame layout.** Little-endian; a leading `u8 type`, then a header (sequence, flags, entry count), then entries keyed by node index (Decision 11), each with entry flags, the included values in their wire widths (preceded by a changed-slot mask except on a `removed` entry), and attention only when changed. The canonical unavailable marker is the quiet NaN of the slot's own width (`0x7E00` for f16).
 - **Keyframes.** Full visible keyframe on (re)connect; appeared entries sent in full on expansion or visibility change; on-demand resync when a client detects a sequence gap.
 - **Baseline and slow clients.** The baseline advances only on an actual socket write. Egress is latest-wins: a stale pending frame is replaced, and a dropped frame does not advance the baseline, so a client never decodes against a value it did not receive. Per-session state stays bounded by the current visible set plus the selected object.
 - **Alternatives rejected.** Numeric deltas — the wire carries absolute values, so there is no client-side accumulation drift; periodic keyframes — keyframes are sent only on (re)connect and on demand; f32 for every slot — it doubles every changed-slot and keyframe byte and puts K5's fixed 0.3 MB/s budget under test for the reductions f16 already covers; u32 for `count` — a third wire type for integers that f32 already represents exactly below 16,777,216.
