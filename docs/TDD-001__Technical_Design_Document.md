@@ -925,6 +925,7 @@ The benchmark topology and its simulator configuration are produced by a **deter
 - Concurrent-session run: ≥ 10 browser sessions at 60 Hz at the full-scale tier (100,000 devices); ≤ 50% aggregate server CPU — engine-process CPU across all its threads, summed and expressed as a fraction of total host capacity, taken as the mean over the steady-state window with the maximum reported alongside (K10); per-client egress within K5.
 - Micro-benchmark: per-channel group aggregation (K9). The measured channel is constructed with 1,000 contributing readings, since no channel of the benchmark topology reaches that fan-in — the widest is a rack channel at ~63 devices × 1 same-unit metric each ≈ 63 (§16.2, FR-AG-02) — so the ceiling is exercised synthetically, not sampled from the topology.
 - Ablation (FR-BR-03, Should): sibling ordering on/off (locality hypothesis; expected nil, since a parent's LOD box is order-invariant); SIMD on/off for aggregation and encoding (informs the SIMD ship decision, Decision 14); ε suppression on/off (egress, K5).
+- Instrumentation: the engine's per-frame statistics snapshots (Decision 27) are the measurement source — per-pass traversal timestamps for K2's p99, the memory series for K1's stable-memory clause, and the ingest and egress counters for K1 and K5.
 - Simulator pinned via `taskset`; non-blocking I/O; pre-generated traces as contingency (R6).
 
 ## 17. Build and Tooling
@@ -933,7 +934,7 @@ The benchmark topology and its simulator configuration are produced by a **deter
 - Nightly toolchain for `portable_simd` (optional, behind a feature flag).
 - Frontend: Vite + TypeScript + Three.js under `client` and `demo`.
 - `taskset` for benchmark core isolation.
-- **Run diagnostics (FR-CD-09):** each component logs a structured boot summary and any validation fault, and exposes counters for ingest rate, rejected readings, aggregate-pass time, and per-session egress; the demo surfaces them in a status panel.
+- **Run diagnostics (FR-CD-09):** each component logs a structured boot summary and any validation fault, and exposes counters for ingest rate, rejected readings, aggregate-pass time, and per-session egress; the engine additionally snapshots a global statistics block every frame into a pre-allocated ring, outside every measured stage (Decision 27), and the demo's status panel plots the series over time.
 - Everything is developed in the open: commits, design notes, and benchmark numbers land in the public GitHub repository as the work happens.
 
 ## 18. Requirement Traceability
@@ -981,6 +982,7 @@ Each decision states its decision in the first sentence, gives labelled aspects 
 | 24 | Frustum test: the five-plane inclusive box test — four wall planes plus the apex plane — defines visibility; conservative over-reporting is accepted | §6.3, §9.2, §11, §15 |
 | 25 | Availability-free visibility: the query is purely geometric — the availability terminal is gone and liveness shapes values at encode time only | §3.2, §5, §8, §9.2, §15 |
 | 26 | Exact-match cut cache: an unchanged camera context and selection reuse the persisted cut bitwise; aggregation and encoding run every frame | §5.5, §6.3, §9.2, §9.4 |
+| 27 | Global statistics: per-frame snapshot outside every measured stage; sharded relaxed counters; bounded pre-allocated ring; never a query input | §16.3, §17 |
 
 ### Decision 1 — Frontier ordering
 
@@ -1255,3 +1257,16 @@ An unchanged camera context and selection reuse the previous cut bitwise instead
 - **Scope.** The cache holds the query result only: aggregation publishes and the encoder's diff run every frame, so a slot that dies or revives changes no cut membership and ships through the always-running encode path (§3.2); the write-anchored previous-frame list (§5.5) remains the transport's, advanced on write only.
 - **Cost.** One persisted cut per session — ≤ B `u32`, ~20 KB at `B` = 5,000 — beside a ~52-byte key; static viewers skip the query entirely, which is §9.4's idle case, previously a contingency.
 - **Alternatives rejected.** Fuzzy matching on quantised camera parameters — it forfeits the fixed point, serving cuts the re-run and the reference would not produce, and defers threshold-crossing flicker instead of absorbing it; keying on the previous-frame node list — it is write-anchored, so a dropped frame would serve a stale cut indefinitely (§10.3); a data epoch in the key — purification removed the query's data coupling, and re-adding it would kill the hit rate for no correctness gain.
+
+### Decision 27 — Global statistics snapshots
+
+The engine maintains a global statistics block — totals, gauges, and per-pass timings — snapshotted once per frame into a pre-allocated ring, at frame close after the transport stage (step 7), outside every measured stage; the block is observational and never a query input.
+
+**Implements:** PRD-001 FR-CD-09.
+
+- **Record-during, copy-after.** A measured pass records its own start and completion timestamps with two clock reads inside the window it measures; the snapshot copy runs at frame close, after the transport stage (step 7) and outside every measured window — K2's engine-instrumentation-only clause (§16.3) stays exact — and every measured pass's completion timestamps exist by copy time.
+- **Counters.** Hot counters are one `AtomicU64` per ingest thread — cache-line padded, one counter per line, so false sharing cannot re-create the contention the shard removes — incremented with relaxed ordering and summed at snapshot time. Relaxed is sufficient: the counters carry no associated payload and no reader needs them linearized against anything, and a sharded sum trails the true count by a few increments, which a 60 Hz chart accepts. A single shared counter is a coherence hotspot on the ingest path; sequential consistency adds barriers on the hot path for the same no-payload reason. 64-bit targets only: elsewhere 64-bit atomics are emulated with locks.
+- **Fields.** Engine-level only — accepted and rejected readings since boot, active client count, allocated and peak memory, the frame's aggregation time and its worst per-viewer traversal and encode times, entries served, offered and accepted rates, egress bytes, and each snapshot's frame sequence and `u64` millisecond timestamp — the wrapping `u32` frame clock (§3.2, Decision 16) is not a chart axis. Memory comes from a counting allocator, near-costless in steady state because the index, state table, and per-viewer scratch buffers are pre-allocated (§5, §9.2), leaving the frame path with nothing to allocate. Per-viewer data stays in the session table, with the active count its only global representative.
+- **Storage and use.** One bounded ring, allocated at boot: 30 minutes at 60 Hz is ~108,000 snapshots of ~200 B ≈ 20 MB, consistent with the engine's pre-allocated regions (§5, §9.2). The demo's status panel plots the series (FR-CD-09), the per-pass traversal timestamps are K2's p99 samples and the memory series is K1's stable-memory evidence (§16.3), and the ring is dumped with the benchmark report (FR-BR-04).
+- **Observational only.** The statistics block is never read by the query: the determinism tuple stays `(topology, camera, selection)` (§9.2), the cut cache key is untouched (Decision 26), and Decision 25's purification holds.
+- **Alternatives rejected.** A single global `AtomicU64` — every ingest thread contends on one cache line at 300k increments/s; sequential-consistency ordering — no payload and no happens-before requirement, so the barriers buy nothing; snapshotting inside the aggregation pass — the observer's copy joins the window it reports on; per-session and per-device series in the global block — cardinality growth against a bounded ring; per-frame logging or an HTTP scrape endpoint — per-frame allocation against the engine's pre-allocation discipline (§5, §9.2) and a new exposed surface where PRD-001 §10 excludes auth; plain per-thread slots in place of shards — marginally cheaper, but a cross-thread read then needs an atomic handoff.
