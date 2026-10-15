@@ -3,12 +3,12 @@
 | Field | Value |
 | --- | --- |
 | Document | DISCUSSION-SUMMARY |
-| Date | 2026-10-13 (extended; first session 2026-10-12) |
+| Date | 2026-10-15 (four sessions: 2026-10-12, 2026-10-13, 2026-10-14, 2026-10-15) |
 | Subject | Review of a proposed final-year project: server-side spatial filtering engine for 3D digital twin visualization |
 | Artifacts reviewed | `docs/PRD-001__Product_Requirements_Document.md`, `docs/TDD-001__Technical_Design_Document.md`, `docs/PLN-001__Master_Execution_Sequence.md` |
 | Participants | Supervisor (critic) and student (author) — roles later swapped into a viva-style exchange |
 
-This document records the discussion so it can be resumed later. **Part I (§1–§8)** captures the initial evaluation, the student's defence, the technical findings, and the reframe that emerged. **Part II (§9–§20)** records a second session that resumed from the open questions in §7 and carried the work forward into a concrete baseline, a cost model, and a deployment-scenario reframe. It is a record, not an instruction to change the design documents. All numerical results in Part II are **first-principles estimates conditioned on stated constants**, not measurements; the constants are named where they must be measured before use.
+This document records the discussion so it can be resumed later. **Part I (§1–§8)** captures the initial evaluation, the student's defence, the technical findings, and the reframe that emerged. **Part II (§9–§20)** records a second session that resumed from the open questions in §7 and carried the work forward into a concrete baseline, a cost model, and a deployment-scenario reframe. **Part III (§21–§33)** records a third session that examined a domain pivot (to "IoT"), pinned down what "the cut is solved" means and which libraries implement it, worked through a client-side cut mechanised with a tiles library and its pub/sub variant, and ended in a viva-style examination that rejected the crossover framing and produced a proposed reposition. **Part IV (§34–§47)** records a fourth session: a continued viva in which the student conceded the original proposal, established that COMP4299 permits a system-development project, and then explored the problem-first discipline — re-skinning versus anchoring, the failing-baseline test, candidate pain points, the uplink-versus-egress and edge-versus-cloud distinctions, the field-technician scenario, and the Google-Maps analogy — arriving at a working framing. It is a record, not an instruction to change the design documents. All numerical results in Part II, Part III, and Part IV are **first-principles estimates conditioned on stated constants**, not measurements; the constants are named where they must be measured before use.
 
 ---
 
@@ -362,3 +362,373 @@ Question: can regime 1 send once and share bytes across clients? **The computati
 - The **honest headline does not flatter the original design.** The server cut is not the winner in general; it is the *bounded* option, and its advantage appears precisely in the region the PRD excludes.
 - The **contribution** remains the **exact live aggregation over a semantic hierarchy** (per-unit `(sum,count)` rollups, `count` tallies, attention/absence, per-frame snapshot consistency), with **placement of selection as the studied variable** — now given a deployment axis and a cost metric that make the tradeoff measurable and non-trivial.
 - **Cheapest feasible path:** two measured arms (R1, R3) off one shared cut crate and one oracle; R2 modelled analytically; cloud-WAN measured with `netem`; edge-LAN modelled or lightly measured; N, V, r, link, B swept; every constant cited to an external anchor and every tuned value disclosed.
+
+---
+
+# Part III — Domain pivot, libraries, and viva (third session)
+
+Part III records a third session (2026-10-14). It covers: whether the topic should pivot to "semantic filtering and aggregation for IoT devices"; a precise account of what "the cut is solved" means and which libraries implement it; the mechanics and costs of implementing a client-side cut with a tiles library, and its pub/sub variant; how attention rendering and client instance mapping work in the server cut; and a viva-style examination that ended in a **rejection** of the crossover framing and a **proposed reposition**. Section numbers continue from §20. As in Part II, all figures are first-principles estimates against stated constants, not measurements.
+
+## 21. The IoT pivot: is it defensible?
+
+The proposal examined was to turn the project into "a semantic filtering and aggregation implementation for IoT devices." The student clarified that **"semantic" means a structural/semantic hierarchy** — the tree of §4–§8 with per-unit configured channels — **not** RDF/OWL/SPARQL reasoning.
+
+**Verdict: not defensible as stated**, on three grounds:
+
+1. **It is a more crowded field than the digital-twin setting**, not a less crowded one.
+2. **It removes the coupling that made aggregation non-trivial** (§10). Drop the view-dependent selection and the problem reduces to "roll up a static tree," which is solved.
+3. **"Implementation for IoT devices" reads as engineering**, not research; adding hardware adds systems scope without thesis content.
+
+| Already does hierarchical IoT aggregation | Coverage |
+| --- | --- |
+| TimescaleDB continuous aggregates, InfluxDB downsampling | Hierarchical rollups over time-series |
+| Flink / Kafka Streams / Spark Structured Streaming | Windowed + hierarchical aggregation |
+| ThingsBoard, AWS IoT Analytics, Azure Stream Analytics | Device hierarchies, rule-based aggregation |
+| **MQTT Sparkplug B** | A *semantic* industrial namespace + payload model |
+| Eclipse Ditto, Azure Digital Twins (DTDL), FIWARE NGSI-LD | Twin abstractions with subscriptions and aggregation |
+| C-SPARQL, CQELS, RSP-QL, Streaming MASSIF | Semantic stream processing |
+| TAG/TinyDB and sketch-based summarisation | In-network aggregation |
+
+**The gate is the scarce resource.** A pivot is defensible only if a real scarce resource is retained **and** selection stays coupled to aggregation; the natural one is **edge/cloud placement under a metered or constrained link**. Plain aggregation with no named scarce resource is engineering-only.
+
+Decisions were deferred pending the professor's approval; the degree gate (§19.1) remains open.
+
+## 22. What "the cut is solved" means
+
+"The cut" is the per-viewer, per-frame visibility + LOD selection that produces a bounded set of entries under the entry budget `B` (§9.2). "Solved" is a claim about **novelty**, not about effort:
+
+- **The cut as an algorithm — solved.** The mechanism is prior art, deployed at scale.
+- **The cut as a design variable — open.** The same standard cut compiles server-side (R3) and to WASM (R2), so the interesting question is *where it runs*, not how to write it.
+
+| Piece of the cut | Prior art that already does it |
+| --- | --- |
+| Frustum culling | Umbra, every engine, three.js/Cesium frustum math |
+| Hierarchical LOD under an SSE / projected-size budget | **3D Tiles / CesiumJS** (`skipLevelOfDetail`), **Potree**, OSG/osgEarth `PagedLOD`, UE5 World Partition / HLOD / Nanite |
+| Server decides what each client is sent (interest) | SpatialOS, Photon, Mirror, FishNet, Unity NGO |
+
+"Solved" does **not** mean unimportant, trivial, or unnecessary: the cut is still infrastructure, and getting it exact, deterministic, hysteretic, and oracle-comparable is hard — but **hard-to-get-right ≠ hard-to-invent**. What is *not* covered is **exact live aggregation over the semantic hierarchy under the cut** and the **placement characterization**. That is the seam Part III explored repeatedly.
+
+## 23. Reusable libraries for the cut
+
+| Library | Gives | Lock-in | Exposes visible set? | Aggregation? |
+| --- | --- | --- | --- | --- |
+| **CesiumJS** (3D Tiles) | Tile traversal, culling, SSE budget, `skipLevelOfDetail` | 3D Tiles; globe engine | Yes — `tileVisible` | No |
+| **`loaders.gl` `Tileset3D`** | Headless 3D Tiles traversal (Node + browser) | 3D Tiles | Yes — selected tiles | No |
+| **Potree** | Octree point-cloud LOD | Potree octree | Yes — `visibleNodes` | No |
+| **OpenSceneGraph / osgEarth** | `PagedLOD`, cull visitor | OSG (C++) | Yes (cull visitor) | No |
+| **Babylon.js** | Culling + LOD | Babylon scene graph | Partially — `scene.getActiveMeshes()` | No |
+| **deck.gl** | `TileLayer` / `Tile3DLayer` | deck.gl | Yes (events) | No |
+| **three.js** | Frustum/`Box3` math, `Object3D.visible` flag | — | **No** — one `InstancedMesh` collapses to one test | No |
+| Umbra / UE5 Nanite / World Partition | Occlusion / LOD | Commercial / engine | Engine-specific | No |
+
+**Three caveats.** (1) They cut **their own** hierarchy/format, forcing a mapping to the semantic manifest. (2) Adopting one in only one arm **confounds the placement comparison** (§18). (3) **None performs the aggregation** — the student's actual contribution.
+
+**Recommendation:** build the cut as **one shared crate** (native + WASM) for experimental control; use Cesium / `loaders.gl` as a **cross-check and related-work anchor**; reuse only the math (`glam`/`nalgebra`, `Frustum`/`Box3`).
+
+## 24. Tiles, visibility, and the data seam
+
+**What a tile is.** A **spatial streaming node**: bounding volume + `geometricError` + children (`REPLACE`/`ADD`) + optional content (b3dm/i3dm/pnts/glTF) + transform + (3D Tiles 1.1) metadata. It is defined by the tileset author and is **not** a semantic object — a tiler merges, splits, and re-levels geometry, so a rack may be merged into a building tile, split across tiles, or present at several LODs. It is "a rack" only if **authored 1:1**.
+
+**The LOD criterion is the same idea.** Cesium's screen-space error — `sse = geometricError · H / (distance · 2 · tan(fovY/2))` — is **proportional to projected size**, i.e. to the §9.2 fraction `Δy / z`. This is *why* the cut is commodity: the criterion is standard.
+
+**Can a library expose rack visibility?** Yes, if rack = tile: Cesium `tileVisible`, `loaders.gl` selected tiles, Potree `visibleNodes`, Babylon `getActiveMeshes`, deck.gl tile events, OSG cull visitor (three.js is the exception).
+
+**Can you "subscribe the drawn rack to a value"?** **No — not from the tiles library.** 3D Tiles has no pub/sub topics and no live per-object values; metadata is static. The tile layer answers "what is drawn"; the value/attention layer is the student's. Colouring is therefore either (a) a per-feature property + `Cesium3DTileStyle` (feasible, but off the intended path and scaling with the number of features/tiles per rack), or (b) **separate** — stream values, render your own markers/instances, and never touch tile properties.
+
+## 25. Client-cut mechanised with a tiles library
+
+The flow the student proposed, and its corrections:
+
+1. Engine **resolves the manifest** (§4.6); the client reads it (FR-TD-09).
+2. **Author a tileset** from the manifest: one tile per node, `boundingVolume.box` = geometry box, `geometricError` from extent, `refine: "REPLACE"`, `node_index` in metadata — a **build/boot step**.
+3. The library **traverses** and selects the visible frontier.
+4. **Query** visible tiles → tile → `node_index`.
+
+**Corrections recorded.**
+- **The library's cut ≠ the student's cut.** It refines by SSE — no entry budget `B` (`K3`), no budget hysteresis `Δ`, no first-class blended entries, no oracle parity. This is fine **only if the client arm is defined as "the standard client-side cut."**
+- **Renderer vs traversal-only** must be chosen deliberately: library draws (overlay values) or library traverses only (draw your own instances).
+- **Do not upload visibility every frame** — that recreates the per-frame feedback loop (§4.4). Regime 2 sends **subscription deltas on change**, rate-limited and hysteretic (§16).
+- **Still missing:** the values (broadcast or subscription) and the identity/metric metadata. A tileset gives **lazy geometry** (an A′-like benefit), but **not** lazy metric/channel definitions — those remain O(N).
+
+## 26. Pros and cons: library client-cut vs server-side cut
+
+| Dimension | Library client-cut (regime 2/B) | Server cut (original, R3) |
+| --- | --- | --- |
+| Cut implementation | Solved; author tileset + traversal — low effort | Build index + frontier + cache + oracle — high effort |
+| Cut semantics | No `B`, no `Δ`, no blend entries, no oracle parity | Full control (`B`, `Δ`, blend, determinism, oracle) |
+| Egress | Unchanged by culling; broadcast = full egress | Bounded, hard per-client byte bound |
+| Server CPU/viewer | ≈ 0 (fanout) → scales to many V | `T_cut+T_encode` → `V_cpu ≈ 74–570`, CPU-bound |
+| Client CPU/mem | Geometry lazy; values + O(N) metadata unless A′ | Thin client; geometry O(B) if lazy manifest |
+| Latency | No camera round trip | Camera loop |
+| Thin clients | Bad | **Good** (hard client CPU bound) |
+| Deployment fit | LAN / capable clients | **Cloud/WAN, metered/constrained links** |
+| Novelty | None on the cut | Only on aggregation + placement |
+| Fit to PRD/TDD | Inverts the premise | Native |
+| Build risk | Low | High |
+| Correctness | Not comparable to the oracle | Oracle, bit-exact |
+
+**Four inversions.** Build cost ↔ control; server CPU ↔ egress; deployment decides; novelty deletes if the cut is the claim.
+
+**Two non-obvious costs.** (1) It **drags aggregation to the client** (or forces duplicate aggregate+raw), because values must reach the client to be overlaid (§10's coupling). (2) `B` is a **product requirement, not an implementation detail** — without it the bounded-workload guarantee (`G2`, `K3`) disappears.
+
+## 27. Adding pub/sub to the client-cut
+
+Adding interest-based pub/sub removes the client-cut's **worst** weakness (broadcast egress). It turns on **subscription granularity** (§16):
+
+| | Fine (frontier subscription) | Coarse (region/subtree) |
+| --- | --- | --- |
+| Server sends | frontier values | **raw device state** for the region |
+| Egress | **≈ R3** | **> R3** when zoomed out |
+| Consequence | R2 ≡ *R3 with the cut moved to the client* | the genuinely distinct third architecture |
+
+- **Egress ordering:** `R1 > R2(coarse) > R3 ≈ R2(fine)`. **CPU ordering:** `R1 < R2 < R3` (§16).
+- **Improves:** egress (from worst to ≈ R3), server CPU (routing ~0.003 vs cut ~0.025 core/viewer), cloud fit (R2 cheapest in cloud, §15).
+- **Costs:** aggregation moves to the client (or duplicates); the **feedback channel returns** (subscription deltas need rate-limiting + hysteresis, or R7 flicker moves to the data channel); binds on **α** (as α→1 egress → broadcast); client holds subscription state (and possibly the subtree); per-frame consistency harder.
+- **Consequence:** **fine pub/sub makes R2 and R3 differ only in where the cut runs** — the cleanest experimental control, i.e. the R2 arm of the study, not an alternative to it.
+
+## 28. Attention rendering in the server-cut design
+
+1. **Server computes** one `u8` per node (reserved attention channel / device level) in the same bottom-up aggregation pass — shared across viewers (FR-AG-06, §8.1, Decision 6).
+2. **Streams per entry, on change:** frame entry flag `bit2 attention-present` + trailing `[u8 attention]` (§10.4, Decision 15); an attention baseline per session suppresses unchanged values.
+3. **Client maps to colour:** keeps a per-node attention map; each frame writes `palette[level]` into the instance colour VBO (§11.1/§11.4, Decision 17). Default display = attention; switching to a metric/channel is client-only.
+4. **Attention vs availability are orthogonal** (severity `u8` vs separate NaN/offline markers, §8.1).
+5. **Cost:** server-side compare-and-selects folded into the existing pass; client O(entries) colour writes; egress one `u8` per changed entry (inside K5).
+
+**Contrast:** with a static tileset the attention value cannot ride the tile — it must be overlaid (property+style or your own markers). The server cut is cleaner here because the value stream and the selection are the same frame.
+
+## 29. Client instance mapping (node index → instance slot)
+
+The wire key is the node index; the instance slot in the `InstancedMesh` is **compacted** (≤ `B`), so the client owns a `nodeToSlot` table built from the **`appeared`/`removed` diff** (§10.3, Decision 11):
+
+- `appeared` → allocate a slot, write the **static** transform from `manifest[node_index]` (position or geometry box), write colour.
+- `removed` → swap-remove and clear the mapping.
+- otherwise → look up the slot; update colour (attention/value) only.
+- `mesh.count = activeCount`; two meshes (marker for devices, box for groups); picking reuses `slotToNode` (§11.3); the table is rebuilt on reconnect with the keyframe (per-build indices).
+
+Transforms are static (topology fixed at boot), so only colours change per frame; the frontier order is unstable, which is why the diff — not entry position — defines the mapping.
+
+## 30. Tileset authoring: limitation and performance
+
+Authoring is a **mechanical transform of the manifest**, not research-hard, but **scale-sensitive**:
+
+| | Estimate |
+| --- | --- |
+| `tileset.json` per tile | ~400–600 B (box + transform + geometricError + metadata) |
+| Building tier (~4,460 tiles) | ~2 MB — fine |
+| Full tier (~101,781 tiles) | ~40–60 MB, explicit (implicit tiling needs a regular octree — not applicable) |
+
+**Performance implications:** client startup parse O(N); client memory O(N) for the tile tree (content lazy, tree not); per-frame traversal moves to the client (plus occlusion culling, which PRD excludes); on-demand content loading causes **pop-in** (can hurt freshness/consistency); steady-state value egress unchanged; no `B`/`K3`; not oracle-comparable.
+
+**Alternative:** compile the **shared cut crate to WASM** — no authoring, no second artifact, same cut semantics across arms, client memory as designed. Use tiles only as a cross-check.
+
+## 31. The viva: challenges and landings
+
+| Challenge | Landing |
+| --- | --- |
+| "Why server-side cut? It reinvents wheels and bottlenecks CPU. Use client-cut." | Conceded the cut is solved and server CPU is a real ceiling (`V_cpu ≈ 74–570`); defended only that client-side **culling does not reduce egress** — culling happens after the bytes left |
+| "Client-cut need not broadcast; it can use pub/sub." | Conceded broadcast is not necessary. Fine pub/sub → egress ≈ R3; coarse → > R3 and aggregation moves client-side; R2 binds on α. Retracted "only the server cut bounds egress" |
+| "R1 can use a relay so co-located clients share the egress." | Conceded — the **edge relay** (§17); cloud→relay is one stream, divided by the clustering factor. Adds a scenario axis (**client topology**) and a fourth architecture; doesn't reduce client work |
+| "Name scenarios where R3 beats R2/R1." | Thin/embedded clients (hard client CPU bound); scattered metered links; coarse-subscription overshoot / exact interest; disclosure control; exact server-side aggregation; locked-down deployments. Conceded **R3 is a bounded niche**, not a general winner |
+| "Defend the topic if it doesn't beat R2." | Reframed: the contribution is the aggregation model + the placement/coupling characterization; the cut is a controlled variable |
+| "Is the problem worth study? Is the answer unclear?" | Partly. The *direction* is guessable (weak); the **crossover locations** (unknown constants), the **coupling**, the **guarantee differences**, and the **counterintuitive** result are not obvious |
+| "Will you implement all four regimes + benchmarks? How long?" | No. Two measured arms (R1, R3) off one shared crate + one oracle; R4 a relay process; R2 modelled with a spot-check; surface obtained by a **calibrated cost model + coarse measured grid**, not exhaustive sweeps. ~19 weeks remain; full four-regime study is 40+ weeks |
+| **Rejection:** too risky; can't finish on time; doubtful research value; the surface is only a ranking; results depend on implementation and don't generalise | Conceded. The surface is overbuilt for a ranking; the crossover is implementation-specific (`b`, `c`, `p`, prices) and generalises poorly. Proposed a reposition to **invariant** results: the aggregation guarantees and the structural **coupling** result |
+
+## 32. Rejection and proposed reposition
+
+The session ended with the professor **rejecting the crossover proposal** as too risky, likely uncompletable in time, of doubtful value (a surface that only yields a ranking), and non-generalisable (results depend on the implementation).
+
+**Student's concession.** The research value cannot rest on measured constants. It must rest on what is **invariant**:
+
+1. **The aggregation model** — exact rollups over a semantic hierarchy under bounded selection, with provable properties (mergeable accumulators, canonical reduction order for bit-exactness, attention/absence semantics orthogonal to availability, per-frame snapshot consistency), validated by an oracle.
+2. **The coupling result** — client-side aggregation requires the client to hold the subtree, forcing a broadcast/interest substrate and dragging selection client-side. **Structural and implementation-independent**; it constrains the design space regardless of constants.
+
+**Proposed reposition.** Keep the engine, drop the crossover as the headline:
+
+> A **hierarchical telemetry aggregation and bounded-delivery engine**: exact live rollups with severity and absence over a semantic tree, delivered per consumer as a bounded slice — evaluated on observability-style rollups and on a constrained-link scenario, with the 3D twin as one demo client.
+
+**Main component** identified as the **hierarchical semantic aggregation engine** (tree + per-unit channels + exact rollups + attention + snapshot consistency, coupled to bounded selection); index, cut, transport, client, simulator, oracle are supporting. **Reusable** toward: observability rollups with severity; constrained-link/remote-site telemetry; disclosure control / multi-tenant delivery; a general "worst-state-in-subtree" severity primitive; and the original digital twin. **Reuse broadens usefulness, not novelty** — the differentiator remains the exactness/consistency guarantees under bounded selection.
+
+**Status: unresolved.** The reposition had not been approved at the time of writing; the degree gate remains open.
+
+## 33. Open questions carried forward
+
+1. **Degree framing** (§19.1) — still the gate.
+2. **Approve the reposition or not** — engine contribution evaluated on observability rollups + constrained-link, versus something narrower the professor names.
+3. **The anchor application** — observability rollups or constrained-link telemetry.
+4. **The coupling result** — is it strong enough to carry a research thesis, and can it be stated as a bound rather than measured?
+5. **Guarantee ordering** — do exactness/consistency requirements flip the regime ranking, independent of implementation constants?
+6. **Integrity** — no tuned parameters presented as findings; key decisions derivable cold.
+
+---
+
+# Part IV — Viva continuation, problem-first discipline, and the Google-Maps framing (fourth session)
+
+Part IV records a fourth session (2026-10-15). It continues the viva-style examination begun in Part III, then moves into the methodology of finding a problem: the distinction between re-skinning a design and anchoring it, the failing-baseline test, candidate pain points and domains, the uplink-versus-egress and edge-versus-cloud distinctions, the relay, the field-technician scenario, and finally the Google-Maps analogy that produced a working framing. Section numbers continue from §33. As before, all figures are first-principles estimates against stated constants, not measurements.
+
+## 34. The viva continuation: the defence narrows
+
+The examination resumed with the supervisor pressing on the stated design; the student conceded that the original proposal "does not stand at the scenario it describes" and that better solutions exist for it. Successive challenges and their landings:
+
+| Challenge | Landing |
+| --- | --- |
+| "The cut is solved and trivial — use a library." | Conceded: hierarchical LOD/tile traversal is commodity (3D Tiles/Cesium, Potree, OSG, interest management); build nothing bespoke to *prove* a point |
+| "It reinvents wheels and bottlenecks the server CPU." | Conceded the CPU ceiling; only the egress argument survives, and only where a client-side cut cannot touch it |
+| "Nothing requires server-side selection." | Conceded again; the cut is a design variable, not a contribution |
+| "Why not regime 2 / pub/sub?" | Conceded broadcast is not a must; fine pub/sub ≈ R3 on egress (via the frontier) |
+| "Why not an edge relay?" | Conceded the relay amortises cloud egress for clustered consumers |
+| "Name a case where R3 beats R2/R1." | Only thin clients, disclosure control, scattered metered links, and server-side exactness; R3 is a bounded niche, not a winner |
+| "Is the topic defensible if it does not beat R2?" | Reframed: the contribution is the aggregation model plus the selection↔aggregation **coupling**, not the cut |
+| "Is the problem worth study — is the answer unclear?" | Partly: the direction is guessable; the crossover locations, the coupling, and the guarantee differences are not |
+| "Will you build all four regimes and the surface?" | No: two arms plus a modelled regime; a calibrated model, not exhaustive sweeps |
+| **Rejection:** too risky, uncompletable, doubtful value, the surface is only a ranking, results are implementation-dependent | Conceded; the research value cannot rest on measured constants — only on **invariant** results (the coupling and the guarantees) |
+
+## 35. Programme scope: COMP4299 permits a system-development project
+
+The student supplied the FYP requirements. The decisive text: the module supports **either a system development project or a research-oriented project with a software development component**, requiring students to "integrate and extend knowledge," and covering the full lifecycle — problem formulation, background and related works, methodology/system design, development and verification, critical evaluation, project and risk management, formal communication, reflection, and societal/ethical implications. **All projects must include a substantial software development component.**
+
+Two programme codes matter:
+- **COMP4299 (BSc Computing):** topics must address a problem in a relevant area of computing — the topic qualifies.
+- **CSAI4299 (BSc AI):** topics must have a **clear AI focus** — the topic would **not** qualify without change.
+
+The student is on **COMP4299**. Consequently: **a system-development project is admissible, and novelty is not required** — the requirements are a real problem, substantial software, integration *and extension*, verification, critical evaluation, and the lifecycle. The supervisor's standing caution, however, is that "integrate **and extend**" still rules out pure assembly, and the missing apparatus (related work, evaluation, reflection/ethics, a dissertation — not a "v1.0 launch") remains owed.
+
+## 36. Re-skinning versus anchoring: the pattern named
+
+Across the session the same engine was re-presented as a digital twin, generic IoT, AR-on-smart-glasses, a robot knowledge service, and spatial knowledge for robots. The supervisor named this the **solution-looking-for-a-problem** pattern and drew the line:
+
+| | Domain-hunting | Re-anchoring |
+| --- | --- | --- |
+| Direction | design → domain | **problem → design** |
+| Held fixed | the design | **the problem/requirement** |
+| Variable | the domain label | **the design's scope/features** |
+| Requirement from | invented to fit | **external** (user, standard, physics) |
+| Output | a demo/label | **a solution + a yardstick** |
+| Test | "does the design fit?" | **"does it meet the need?"** |
+| Falsifiable? | no | **yes — "wrong tool when…"** |
+| Failure mode | contrivance | scope creep |
+
+**Three tells.** (1) If moving to a new domain changes **nothing** about the design or the requirements — only the label — it is hunting; if it imposes a requirement you did not choose and forces the design to change, it is anchoring. (2) Hunting has a **demo**; anchoring has a **yardstick**. (3) Anchoring lets you **abandon parts of the design**; never being willing to cut a feature means defending, not anchoring.
+
+The student's proposed framing — "find a problem that needs real-time, massive EPS, and selection" — was identified as **hunting**, because those are the design's *inputs*, not a pain. A problem-first start begins from a pain and **derives** the requirements (which may include some, all, or none of those inputs). When challenged on how to start without constraints, the distinction was drawn between **sourced constraints** (external facts that anchor) and **provisional constraints** (working hypotheses that must be tested); the sin is not having constraints but refusing to test them. A **minimal pain hypothesis** — one sentence about the world, no solution properties — was proposed as the correct starting point.
+
+## 37. What "the cut is solved" means (restated), and where it is not
+
+- **Hierarchical tile/LOD traversal — solved:** 3D Tiles/Cesium, Potree, OSG/osgEarth, interest management. The cut is a commodity and a **design variable**, not a contribution.
+- **Per-instance selection — not provided by libraries.** Established in detail:
+  - Cesium `i3dm` renders instances efficiently but gives **tile-level** visibility, not per-instance ids; batch-table properties can carry a node id for `pick`.
+  - three.js/Babylon `InstancedMesh` render instances with **no per-instance visible-list API**.
+  - Potree exposes **node-level** visibility (`visibleNodes`); deck.gl offers picking, not a visible list.
+  - **Consequence:** for per-instance entries with values, **you compute the cut yourself** (frustum tests over your boxes/positions — cheap), and maintain the `node↔instance` mapping for colouring and picking.
+- **The per-node-tile option** (one Cesium tile per node, no instancing) would give per-node ids for free, but is **impractical at scale** (≈100k tiles → huge tileset JSON, O(N) client memory/traversal), yields **no control** over cut semantics (`B`, hysteresis, determinism, oracle), and is **client-side only** — ruining the server-side visibility needed for bounded delivery.
+- **Conclusion:** build the selection; use Cesium/three.js purely as the **renderer** (`i3dm`/`InstancedMesh`). Regime choice (server- vs client-cut) becomes a **placement** variable.
+
+## 38. Transport and metadata mechanisms
+
+- **Cesium picking:** `scene.pick` returns a `Cesium3DTileFeature`; the node identity must be stored as a **batch-table property** to recover the node index. Clicking a blended rack yields the **group node's** index. The engine never sees the click — the **client** raycasts, maps `instanceId → slot → node index`, and publishes the index as the inspection target (FR-VS-02).
+- **Lazy manifest:** necessary, not novel. Shipping only the descriptors for nodes the client has seen makes client memory **O(B)** rather than O(N) (≈40 MB at 100k). It is ordinary lazy/on-demand loading (cf. 3D Tiles streaming content); in the **server-cut** regime it lazifies the *dictionary*, while the **client-cut** regime additionally needs a **coarse culling structure** (a different problem).
+- **Whole-tileset reuse:** reusing a tileset **across clients** is good (static geometry is cacheable, unlike per-client values); reusing it as **multiple placements** in one scene is inefficient (each copy is traversed/cached separately — use `i3dm`). Reuse covers **geometry only**; values, attention, and the node↔instance mapping remain the engine's.
+
+## 39. Exactness is necessary but not scarce
+
+The supervisor's earlier emphasis on "exact" rollups was corrected. Exactness (correct, and in the stronger sense bit-reproducible against a reference) has value for trust, cross-consumer consistency, composability, delta stability, and verifiability — but:
+
+- **SQL** aggregates (`sum/mean/min/max/count`) are exact (though not bit-reproducible across plans);
+- **incremental view maintenance** (Differential Dataflow, DBSP, Materialize, RisingWave) is exact and incremental;
+- **CRDTs** give exact, convergent, mergeable aggregation;
+- **stream processors** compute exact operators (subject to FP-order under parallelism).
+
+So **exactness alone is commodity.** Achieving it requires only the mergeable reductions, mergeable accumulators, a canonical reduction order for bit-exactness, availability semantics, a per-frame snapshot, and an oracle — all known disciplines. The genuine difficulties are **bit-exactness under parallelism/SIMD**, **exactness under partial availability**, and **exactness coupled to a bounded, consistent, per-consumer selection**. The last is the residue.
+
+## 40. Competitors, and the glue question
+
+The competitor landscape was set out by capability (see §23–§24) with the **closest threats** being: **IVM engines** (Materialize/DBSP/Differential Dataflow) for the aggregation; **interest management + a broker** for the delivery; **integrated twin platforms** (Azure Digital Twins, AWS TwinMaker, Eclipse Ditto, NGSI-LD) for the product angle. The gap — hypothesised, to be verified — is the **bottom row** of the matrix: **all of exact hierarchical rollup, consistent snapshot, per-consumer selection, hard per-consumer bound, and constrained delivery, coupled.**
+
+**Will it fall to the glue criticism?** It does **iff** the naive composition of best-of-breed components satisfies the requirement. The test is empirical, not rhetorical: **wire the components the obvious way and see whether the coupling fails.** It likely does — the contracts conflict (event-time windows vs per-frame snapshots; relevance vs exactness; routing vs bounding) — so the reconciliation is engineering, not glue. **The way to defeat the criticism is to build the baseline and show the failure**, not to argue.
+
+**Baselines are cheap and are not a second system:** modes of the engine (broadcast, static/manual selection, no bound, no snapshot) and one configured off-the-shelf stack. The comparison is the *evaluation*; the system plus the coupling is the *contribution*. Two cautions: the alternatives must be **best-of-breed, not strawmen**, and building them must not crowd out the system.
+
+## 41. No access: use public anchors
+
+The student has no industry/lab/dataset access. **External anchors are still available:**
+
+| Kind | Available? | Gives |
+| --- | --- | --- |
+| User/site/contact | No | lived problem, validation |
+| **Standards/specs** (OPC-UA, ISA-95, LoRaWAN, IEC 61850, C37.118) | Yes | citable requirements |
+| **Literature** (latency budgets, scale, failure reports) | Yes | anchors, related work |
+| **Public datasets/benchmarks** | Yes | external validity |
+| **Simulators** (Gazebo, `netem`, synthetic generators) | Yes | a testbed |
+
+Without a user, the project's structure becomes **a cited requirement → a best-of-breed baseline that fails it → the composition → an evaluation** — a legitimate systems/benchmark shape. The burden shifts onto the **citation** and the **baseline**, and the temptation to fabricate a scenario must be resisted.
+
+## 42. Candidate pains and domains
+
+The telemetry domain is **not** exhausted — real open pains include cardinality explosion/cost, anomaly-preserving reduction, energy/carbon ("green observability"), late/out-of-order correctness, cost-optimal placement, semantic interoperability, and root-cause across hierarchies. **But the pains that are genuinely unsolved mostly do not fit the engine; the pain that fits (bounded, consistent, exact rollups) is largely solved by IVM/brokers.** That is why "everything feels solved": the domain was being judged through the engine's lens.
+
+Candidate pains with a physical, citable constraint:
+
+| # | Pain | Anchor | Fit |
+| --- | --- | --- | --- |
+| 1 | Substation link cannot carry full PMU/synchrophasor telemetry, but operators need wide-area aggregates | IEEE C37.118; utility telecom limits | strong |
+| 2 | Remote industrial sites over LPWAN/satellite cannot carry the tag stream | LoRaWAN (0.3–50 kbps), NB-IoT (~100 kbps), satellite cost | **strongest, lowest effort** |
+| 3 | Vessels/aircraft report over metered satellite; fleet aggregates needed | Inmarsat/Iridium cost | strong |
+| 4 | High-cardinality observability: costly, stale, unbounded per-tenant delivery | cardinality/cost literature | strong on scale, weak on physical constraint |
+| 5 | Renewable-farm SCADA over constrained comms | IEC 61400-25 | moderate |
+| 6 | Water/wastewater remote sites | LPWAN limits | low (same shape as #2) |
+
+**#2 (remote industrial/LPWAN)** was ranked lowest effort: the constraint is physical and citable, the engine fits with minimal change (keep state, hierarchy, aggregation, selection, transport, simulator, oracle; cut real-time and LOD), the data is synthetic, and the evaluation is a straight byte-budget comparison.
+
+## 43. Uplink vs egress; edge vs cloud; the relay
+
+- **"Remote industrial" ≠ LPWAN.** Connectivity is a scenario choice — LPWAN (bandwidth/duty cycle), satellite (metered cost/latency), cellular (budget/coverage), private radio, leased line — and the constraint differs by technology. The pain exists only if the chosen link is **constrained**.
+- **Sending to the cloud does not remove the constraint — it relocates it.** The site→cloud **uplink** is still the site's link; the cloud→consumer **egress** may be constrained or **metered** (egress is billed). Which link is the bottleneck decides **where the engine sits**:
+  - **Uplink-constrained → engine at the edge** (aggregate before transmitting);
+  - **Egress-constrained → engine in the cloud** (bound per-consumer delivery);
+  - **Neither → no pain** (broadcast suffices).
+- **The uplink is solved by aggregation, and selection does not help it** — the uplink carries the *union* of consumer interests, so per-consumer selection reduces only the **downlink/egress**. For the uplink, a gateway's aggregate-and-forward is sufficient and commodity.
+- **The office relay** amortises **cloud egress** for **clustered** consumers (one stream to the relay, fanned out locally). It fails for **scattered** consumers (no amortisation), **thin** consumers (they still receive the full stream), and **heterogeneous** interests (the relay sends the union). So the pain requires consumers that are **scattered**, **thin**, or **heterogeneous**.
+- **"Local aggregate + upload"** therefore fails **not** on the uplink but on consumer-side requirements: per-consumer bounded delivery, cross-consumer consistency, exactness under partial availability, mixed per-field freshness, dynamic selection under a bound, severity propagation, and fleet-wide consistency — i.e., the coupling.
+
+## 44. The field-technician scenario
+
+A concrete human anchor was examined: a field technician servicing an asset, using a tablet to see telemetry **near the point of issue** to grasp the **cause** and the **effect of the fix**. The twin gives: asset location, status at a glance (colour by severity), surrounding context (adjacent equipment, zone aggregates), per-asset readings/history, fault extent, and safety context. The technician's **position** drives a **bounded, relevant slice** — the engine's shape.
+
+Two corrections were recorded:
+- The need is **deliberative, not real-time.** Safety-critical reactive information comes from **onboard sensors**, not the twin; the twin supplies status/history/spatial context at **seconds** scale.
+- Usage is **intermittent**, not continuous — the technician opens the twin at an asset, so the "many moving viewers at 60 Hz" premise still fails.
+
+The derived requirements were graded: **position-dependent selection holds** (intrinsic to the task); **aggregation holds** but **exactness is weakly motivated** for human diagnosis; **"real-time" is over-claimed** — the honest requirement is **responsive** (sub-second to ~1 s), justified by watching a fix take effect. The scenario also has only **one** consumer (a weak bound pain) and does not yet test the alternatives.
+
+## 45. The Google-Maps analogy
+
+The strongest structural analogy found: Google Maps is a **tiled, view-dependent, lazily streamed, edge-cached, bounded** delivery system for **static substrate + a live layer**. Its **selection is client-side** (the client requests the tiles for its viewport), and it knows each object's properties because **vector tiles carry features with attributes** that the client styles; genuinely live layers (traffic) are a **separate channel joined by id**.
+
+| | Google Maps | The engine |
+| --- | --- | --- |
+| Substrate | map tiles (geometry + identity) | manifest/tiles (geometry + node id) |
+| Live layer | traffic (joined by id, styled) | value stream (joined by id) |
+| Selection locus | **client** (viewport) | **server** (for bounded/per-consumer delivery) |
+| Personalization | **shared** layer | **per-consumer** bounded slice |
+| Aggregation | pre-aggregated, approximate, **shared** | **exact, hierarchical, per-consumer, consistent** |
+
+The key divergence: Maps can be **client-selection because its content is shared**; **personalized content forces server-side selection**. So the skeleton (static substrate + live channel + join + view-dependent selection + LOD + lazy + bounded) is **solved and proven by Maps**, while the residue — **personalized, exact, per-consumer, consistent hierarchical rollup** — is what Maps does **not** do.
+
+## 46. Working framing at the end of the session
+
+> **A Google-Maps-shaped service for live telemetry**: static substrate (geometry + node id) plus a live value channel joined by id, **view/position-dependent**, **lazily streamed**, and delivered as a **bounded, exact, consistent, per-consumer slice** — where the tile/streaming half is a solved substrate (Maps, 3D Tiles) and the **selection↔aggregation coupling** is the contribution.
+
+Evaluated as a **COMP4299 system-development project**: reuse the engine (state, hierarchy, aggregation, selection, transport, simulator, oracle), cut real-time/LOD/3D as the pain does not demand them, **build the selection** (cheap; needed for control, placement, determinism), use a library renderer (`i3dm`/`InstancedMesh`) for drawing only, and **prove the coupling by building the baselines** (broadcast, static selection, relay, naive IVM+broker) and measuring where they fail.
+
+**Status:** a working framing, not yet an approved problem. The unresolved gates are a **sourced pain and requirement** (candidate #2 is the current lead) and whether the hierarchy of open decisions can be closed in the remaining time.
+
+## 47. Open questions carried forward (Part IV)
+
+1. **The sourced requirement** — which pain, from which citable anchor (candidate #2 leads)?
+2. **The constraint** — is it the **uplink** (then aggregation suffices; no project) or **egress/consumer-side** (then the coupling is the project)? Must be the latter.
+3. **Consumer topology** — clustered (relay wins), scattered, thin, or heterogeneous? The pain lives only in the latter three.
+4. **Placement** — engine at the **edge** or in the **cloud**, driven by the bottleneck link.
+5. **The failing baseline** — does the naive stack (IVM/stream processor + broker) actually fail the coupling? This is the make-or-break experiment and should run first.
+6. **One extension, one evaluation, one consumer class** — the scope that fits the remaining time.
+7. **The missing apparatus** — related work (the competitor matrix), critical evaluation, reflection/ethics, a dissertation, a resynced PLN.
+8. **Integrity** — derive the key decisions cold; no tuned parameters presented as findings.
