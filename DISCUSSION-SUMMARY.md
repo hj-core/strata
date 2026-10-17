@@ -3,12 +3,12 @@
 | Field | Value |
 | --- | --- |
 | Document | DISCUSSION-SUMMARY |
-| Date | 2026-10-16 (six sessions: 2026-10-12, 2026-10-13, 2026-10-14, 2026-10-15, 2026-10-16 ×2) |
+| Date | 2026-10-17 (seven sessions: 2026-10-12, 2026-10-13, 2026-10-14, 2026-10-15, 2026-10-16 ×2, 2026-10-17) |
 | Subject | Review of a proposed final-year project: server-side spatial filtering engine for 3D digital twin visualization |
 | Artifacts reviewed | `docs/PRD-001__Product_Requirements_Document.md`, `docs/TDD-001__Technical_Design_Document.md`, `docs/PLN-001__Master_Execution_Sequence.md` |
 | Participants | Supervisor (critic) and student (author) — roles later swapped into a viva-style exchange |
 
-This document records the discussion so it can be resumed later. **Part I (§1–§8)** captures the initial evaluation, the student's defence, the technical findings, and the reframe that emerged. **Part II (§9–§20)** records a second session that resumed from the open questions in §7 and carried the work forward into a concrete baseline, a cost model, and a deployment-scenario reframe. **Part III (§21–§33)** records a third session that examined a domain pivot (to "IoT"), pinned down what "the cut is solved" means and which libraries implement it, worked through a client-side cut mechanised with a tiles library and its pub/sub variant, and ended in a viva-style examination that rejected the crossover framing and produced a proposed reposition. **Part IV (§34–§47)** records a fourth session: a continued viva in which the student conceded the original proposal, established that COMP4299 permits a system-development project, and then explored the problem-first discipline — re-skinning versus anchoring, the failing-baseline test, candidate pain points, the uplink-versus-egress and edge-versus-cloud distinctions, the field-technician scenario, and the Google-Maps analogy — arriving at a working framing. **Part V (§48–§78)** records a fifth session (2026-10-16): the testing of the framing's load-bearing claims (all of which fail in the natural setting), the audit of the best-of-breed libraries and their universal gaps, the assessment of two domain pivots (dashboards and smart city), the supervisor's challenges, the recalibration of the bar for COMP4299, the reframed system-development project, the 19-week feasibility audit, and the concrete mechanics of the cut and of delivery — arriving at a provisional candidate and an explicit set of gates. **Part VI (§79–§92)** records a sixth session (2026-10-16, continuing): the engine's status review, the catalogue of six arXiv papers and one repository read during the session and the pattern they reveal, the recommendation on the engine's disposition, and the turn to finding a *system-development* topic — the module's criteria, the sources and methods for locating one, the four-part filter, and the strongest candidates (a drift-aware twin; a DT-drift-management project). It is a record, not an instruction to change the design documents. All numerical results in Part II through Part VI are **first-principles estimates conditioned on stated constants**, not measurements; the constants are named where they must be measured before use.
+This document records the discussion so it can be resumed later. **Part I (§1–§8)** captures the initial evaluation, the student's defence, the technical findings, and the reframe that emerged. **Part II (§9–§20)** records a second session that resumed from the open questions in §7 and carried the work forward into a concrete baseline, a cost model, and a deployment-scenario reframe. **Part III (§21–§33)** records a third session that examined a domain pivot (to "IoT"), pinned down what "the cut is solved" means and which libraries implement it, worked through a client-side cut mechanised with a tiles library and its pub/sub variant, and ended in a viva-style examination that rejected the crossover framing and produced a proposed reposition. **Part IV (§34–§47)** records a fourth session: a continued viva in which the student conceded the original proposal, established that COMP4299 permits a system-development project, and then explored the problem-first discipline — re-skinning versus anchoring, the failing-baseline test, candidate pain points, the uplink-versus-egress and edge-versus-cloud distinctions, the field-technician scenario, and the Google-Maps analogy — arriving at a working framing. **Part V (§48–§78)** records a fifth session (2026-10-16): the testing of the framing's load-bearing claims (all of which fail in the natural setting), the audit of the best-of-breed libraries and their universal gaps, the assessment of two domain pivots (dashboards and smart city), the supervisor's challenges, the recalibration of the bar for COMP4299, the reframed system-development project, the 19-week feasibility audit, and the concrete mechanics of the cut and of delivery — arriving at a provisional candidate and an explicit set of gates. **Part VI (§79–§92)** records a sixth session (2026-10-16, continuing): the engine's status review, the catalogue of six arXiv papers and one repository read during the session and the pattern they reveal, the recommendation on the engine's disposition, and the turn to finding a *system-development* topic — the module's criteria, the sources and methods for locating one, the four-part filter, and the strongest candidates (a drift-aware twin; a DT-drift-management project). **Part VII (§93–§98)** records a seventh session (2026-10-17): the drift topic subjected to the same critique that killed the engine; the resolution of the recurring **"it sounds trivial"** reaction (separating *novelty* from the module's bar); the **track decision** (system-development vs research) as the gate; a **calibration survey of IoT scenarios** (device counts, rates, EPS, links); and an explicit **state and gates** section so a new Plan agent can resume. It is a record, not an instruction to change the design documents. All numerical results in Part II through Part VII are **first-principles estimates conditioned on stated constants**, not measurements; the constants are named where they must be measured before use.
 
 ---
 
@@ -1179,3 +1179,124 @@ Read at README level: a **research artifact** (conference submission; arXiv 2512
 - **Drift detection is not inherently ML** — its **management** half is systems and is the paper's actual gap.
 - **Next step:** bring the supervisor **2–3 candidates** written as *problem → stakeholder (and how you'll reach them) → minimal solution → verification → ethics*, and **talk to a stakeholder** — because that is what turns a candidate into a project.
 - **Status: the engine is provisionally abandoned; no new topic is yet adopted. The gate is a *sourced, reachable stakeholder*.**
+
+---
+
+# Part VII — The drift topic's sufficiency, the "trivial" question, and device calibration (seventh session)
+
+Part VII records a seventh session (2026-10-17). It continues from Part VI's candidates. It subjects the **drift topic** to the same critique that killed the engine; resolves the recurring **"it sounds trivial"** reaction by separating *novelty* from the *module's* bar; records the **track decision** (system-development vs research) as the gate; and adds a **calibration survey** of IoT scenarios (device counts, rates, EPS, links) so candidates can be sized realistically. It closes with an explicit **state and gates** section so a new Plan agent can resume. Section numbers continue from §92. Figures in §97 are indicative ranges, not sourced measurements.
+
+## 93. Orientation
+
+The session returned to *topic sufficiency*. The method was unchanged: **apply the same critical lens to every candidate** — the one that killed the engine (§50, §64, §83). Two questions dominated: *"is the drift topic just *inject → detect*?"* and *"does it sound trivial?"* A calibration survey was then added so future candidates can be sized against real deployments.
+
+## 94. The drift topic under critique: "inject → detect"?
+
+Question: **is the whole system simply *inject a drift* and then *run a statistical detector*?** Answer: **yes, framed that way — and that framing is too thin.**
+
+- **The injection is the *harness*, not the system.** Injecting drift creates the scenario to test, like the simulator in the engine's case (§70). It is not a deliverable.
+- **A detector alone is *commodity*.** ADWIN, Page-Hinkley, PSI, KS, residual monitoring exist and are simple to apply — the paper's *starting point*, not its gap. If the deliverable is "we ran ADWIN on the twin," that is the **engine's failure mode**: a commodity component dressed as a project.
+- **The *system* must be the response**: a **closed loop** — detect → **decide** → **act** → **verify** — with the **management policy** (when to *recalibrate*, *re-scope*, or *fall back*) and **provenance/attribution** (*which* source or dimension drifted). That is the section the paper explicitly frames as the open gap: *"detection must trigger appropriate DT evolution."*
+- **The evaluation must be more than "did it detect":** recovery time, false-alarm rate (alarm fatigue), detection latency, and cost, over **several drift types**, **against a baseline**, and **grounded**.
+- **The validity risk (recorded):** injecting *your own* drift into a *simulator* means detecting *drift you planted* — easier than real drift, and coupled to the injector. Mitigation: inject into a **real dataset** (e.g. the air-quality dataset used in the repository, §90) so the *baseline behaviour* is real even if the drift is synthetic.
+- **The advantage over the engine:** the paper **names the management gap** (§5.4) — a *cited open problem*, which the engine never had.
+- **The framing that fixes it:** *"a closed loop that keeps the twin trustworthy: it detects divergence, decides the right response, executes it, and verifies recovery — evaluated on recovery time, false alarms, and cost against a naive threshold."* The subject is the **loop and its policy**; the detector is a component; the injection is the harness; the **evaluation is the evidence**.
+
+**The test recorded (same as the engine):** *is the residue — the management policy — a real problem, or a line of code?* If a competent engineer would just write "threshold + recalibrate and move on," it is thin; if *when and how* to evolve the twin without thrashing is genuinely non-obvious, it is a project.
+
+## 95. "It sounds trivial": novelty vs the module's bar
+
+The recurring reaction — *every* candidate "sounds trivial" — was diagnosed:
+
+| Considered | Verdict |
+|---|---|
+| The engine | commodity parts + thin residue |
+| The supervisor's six topics | commodity parts (one template) |
+| Dashboard / smart-city / robot pivots | commodity or crowded |
+| The four DT research challenges | research-shaped (need narrowing) |
+| The drift topic | commodity detector + thin residue |
+| Every paper read | a neighbour, not a seam |
+
+**The diagnosis:** a **research bar** was being applied to a **system-development module** where **novelty is not required** (§35, §67). By the research bar, almost every systems project is trivial; by the module's bar, they are precisely what is asked.
+
+**So the question changes:** not *"is it novel?"* but *"does it satisfy the module's four criteria — problem, stakeholder, solution, verification — and can it be executed and evaluated well?"* By that bar the drift topic is **not disqualified**: it has a **named open problem**, a **potential stakeholder**, a **buildable solution**, and a **measurable verification**.
+
+**Where depth must come from (it is not novelty):** (1) a **real stakeholder** with a lived pain; (2) a **rigorous, grounded evaluation** (multiple drift types, recovery, false alarms, latency, cost, against a baseline); (3) a **genuine constraint** (a hard bound, a safety/ethics obligation, a scale that breaks the composition); (4) for *research* only, a real gap.
+
+**The engine comparison recorded:** the engine died **not because it was trivial** but because it was **trivial *and* unmotivated *and* heavy**. The drift topic is **trivial, better-motivated (a cited gap), and lighter** — so it is *strictly better*, **provided** the stakeholder and the rigorous evaluation are brought.
+
+## 96. The track decision
+
+The conversation's central unresolved fork was sharpened:
+
+- **System-development** (COMP4299's named option): **trivial-in-novelty is fine**; depth comes from **stakeholder + evaluation**; the drift topic, the accessibility topic, and an extended supervisor topic are all **admissible**.
+- **Research** (the other permitted option): **novelty is required**; the seven papers across six domains found **no named seam**; the crossover was **rejected** (§31); the hunt is **harder** and **riskier**.
+
+**Recorded:** the topic's quality is decided by the **stakeholder** and the **evaluation**, not by whether the components are novel. Until the track is chosen, every candidate will keep "sounding trivial" — because the bar is unstated.
+
+## 97. IoT device survey (calibration)
+
+Indicative ranges (not sourced; anchor to a specific deployment before use):
+
+| Scenario | Devices / points | Update rate | Metrics/device | EPS (order) | Link / protocol | Notes |
+|---|---|---|---|---|---|---|
+| Smart home | 10–100 | event + 1/min–1 Hz | 1–5 | 10¹–10² | Wi-Fi, Zigbee, Matter, BLE | privacy; low criticality |
+| Commercial building (BMS) | 1k–50k points | 1–15 min (critical 1–60 s) | 1–3 | 10²–10³ | BACnet, Modbus, KNX | energy/HVAC; history |
+| Industrial plant (SCADA/DCS) | 10k–1,000k **tags** | 0.1–10 Hz | 1–10 | 10⁴–10⁵ | OPC-UA, Modbus, PROFINET | safety; exactness |
+| Manufacturing line (IIoT) | 10²–10⁴ sensors | 1–1,000 Hz | 1–10 | 10³–10⁵ | OPC-UA, TSN, Sparkplug B | vibration; maintenance |
+| Smart grid — meters | 10⁵–10⁷ per utility | 15 min–1 h | 2–5 | 10²–10³ | DLMS/COSEM, PLC, cellular | **billing → exactness**; privacy |
+| Smart grid — substation/PMU | 10–10² per substation | **30–120 Hz** (C37.118) | 10+ phasors | 10⁴–10⁵ | IEC 61850, DNP3, C37.118 | **hard latency** |
+| Smart city — traffic | 10²–10⁴ | 1–30 Hz | 2–10 | 10²–10⁴ | cellular, fibre, LoRaWAN | latency-sensitive |
+| Smart city — air quality | 10²–10³ stations | 1 min–1 h | 3–6 | 10⁰–10² | LoRaWAN, NB-IoT | calibration drift |
+| Smart city — lighting/parking | 10³–10⁵ | event / daily | 1–3 | 10⁰–10² | LoRaWAN, NB-IoT | constrained; low rate |
+| Agriculture (soil/weather) | 10²–10³ per farm | 5–60 min | 2–5 | 10⁰–10¹ | **LoRaWAN, NB-IoT** | constrained; battery |
+| Livestock / asset tracking | 10²–10⁵ | minutes–hours | 1–3 | 10⁰–10² | BLE, LoRaWAN | battery; geofencing |
+| Fleet / logistics | 10²–10⁵ | 1–60 s | 5–20 | 10³–10⁵ | **cellular, satellite** | metered; intermittent |
+| Maritime / aviation | 10²–10⁴ | 1 s–1 min | 5–20 | 10²–10⁴ | **satellite (metered)** | cost/latency |
+| Healthcare — vitals | 10²–10⁴ per hospital | 1 s–1 min | 3–8 | 10²–10³ | Wi-Fi, BLE, FHIR | privacy; safety |
+| Wearables | 1–10 per person | 1–100 Hz | 3–10 | 10⁰–10² per person | BLE, cellular | battery; high rate |
+| Retail — ESL / shelves | 10³–10⁵ | event / daily | 1–3 | 10⁰–10² | BLE, Zigbee, Wi-Fi | huge count, low rate |
+| Water / utilities | 10⁴–10⁶ meters | 15 min–1 day | 2–5 | 10¹–10³ | LoRaWAN, NB-IoT, PLC | constrained; billing |
+| Data centre (DCIM) | 10³–10⁵ servers | 1–10 s | **10–100** | **10⁵–10⁶** | Redfish, IPMI, SNMP | high cardinality |
+
+**Three observations recorded:**
+
+1. **"Big data" ≠ "many consumers."** High EPS lives in **plants, grids, data centres, fleets** — whose consumers are **few** (operators, planners). Many consumers live in **home / city / SaaS** — where rates are **low** and content is often **shared**.
+2. **Constrained-link scenarios are low-rate.** Agriculture, meters, lighting, parking, maritime — **LPWAN/satellite**, but **minutes-to-hours** and **few metrics**. So "constrained link" and "high rate" **rarely co-occur**.
+3. **Exactness and privacy cluster by domain.** Billing (meters, water) and protection (grid) need **exactness**; health, home, meters need **privacy**; industrial viewing needs **neither** urgently.
+
+**The structural finding (restated in numbers):** the properties are each common but **live in different scenarios** — the same "three different worlds" result as §50 and §63.
+
+## 98. State and gates for a new Plan agent
+
+**Purpose:** this section is a handover for continuing in Plan mode.
+
+**The engine.** Provisionally **abandoned** (§83, §92) — trivial in novelty, heavy in build, unsourced in need, and the supervisor calls it trivial. If it is ever revived, it must be **shrunk** to the **coupling + one composition baseline + the evaluation** (not the full engine), and framed as a **stated-requirement system-development project**. The **analysis is the asset**: the coupling, the commodity audit, the failing-baseline method, and the **seven related-work anchors** (§81) — usable for any topic's related-work chapter.
+
+**The candidates on the table.**
+
+| Candidate | Source | Status |
+|---|---|---|
+| **Drift-aware twin** (DT drift detection & management) | §87–§89 | **primary** — a *cited* open challenge, a reachable stakeholder, a measurable evaluation, ~140–160 h; **risks thinness** if framed as "inject → detect" (§94) |
+| **Accessibility / neurodiversity** support system | §86 | **strong** — named stakeholders, a *mandated* requirement, software-only, measurable, ethics built in |
+| **Extend a supervisor topic** with a real stakeholder + evaluation | §66, §84 | **pragmatic** — his domain, his approval, a small build (~120 h) |
+
+**The critiques that must be answered for any candidate.**
+
+- **Not "is it novel?"** — novelty is not required for system-development (§95). The question is the **module's four criteria**: problem, stakeholder, solution, verification.
+- **Is the *residue* real, or a line of code?** (The engine's test.) For drift: is the **management policy** non-trivial? For accessibility: is the **decision support** more than a form?
+- **Is it *grounded*?** A synthetic injection/testbed must rest on **real data** or a **real stakeholder** (§94).
+- **Is the build right-sized?** 16 h/week × ~19 weeks ≈ **304 h**, ~**90 h** of which is the dissertation (§69). Prefer **~120–160 h** builds.
+
+**The gates, in order.**
+
+1. **Choose the track** — **system-development** (trivial-is-fine; depth from stakeholder + evaluation) or **research** (novelty required; the seam is elusive). *Everything else depends on this* (§96).
+2. **Choose the track's candidate** — drift-aware twin (primary), accessibility, or an extended supervisor topic.
+3. **Name a *reachable* stakeholder** — the asset the engine never had. If none can be reached, the candidate is a hypothetical (§84–§85).
+4. **Talk to the supervisor** — bring **2–3 candidates** as *problem → stakeholder (how you'll reach them) → minimal solution → verification → ethics*, and ask **what bar he holds** and whether he accepts **student-proposed** topics (§91).
+5. **Run the four-part filter** on the chosen candidate: **problem + stakeholder + buildable solution + verification** (+ *reachable and observable*).
+6. **Integrity** — anchor the criteria; no tuned parameters; the candidate must be **derived**, not fitted.
+
+**What a new Plan agent should do.** Ask **which track** and **which candidate** the student is on; then help **name and reach a stakeholder** and **draft the candidate paragraph** for the supervisor. Do not re-litigate the engine unless asked; do not let the conversation drift back into "find a domain for the engine" (§36). The recurring trap is now well documented: **every candidate will "sound trivial" until the track and the stakeholder are fixed** — so fix those first, and judge the topic on *stakeholder + evaluation*, not novelty.
+
+**Bottom line:** the discussion has moved from **"can the engine be defended?"** (answer: not as a problem; only as a stated-requirement engineering project, and at high cost) to **"which system-development topic has a real stakeholder and a measurable evaluation?"** — with the **drift-aware twin** as the primary candidate, **accessibility** as the strongest human-centred alternative, and **extending a supervisor topic** as the pragmatic fallback.
