@@ -25,7 +25,7 @@ The document is written to be audited: every parameter has an external anchor or
 
 The comparison does not show an unconditional advantage.
 
-1. Under the base scenario (S0), no design dominates **among packages that meet the S0 consumer requirement**. Fine-grained interest delivery and the server-side cut tie on egress (~13 KB/s per client); broadcast is approximately 5× worse (the ratio of devices to entry budget, `N/B`); the server-side cut pays approximately 8× the server CPU at a 60 Hz selection rate, narrowing to approximately 1.3× at 10 Hz, within the `b`/`c` uncertainty (a tie within error).
+1. Under the base scenario (S0), no design dominates **on the quantified metrics among packages that meet the S0 consumer requirement**. Fine-grained interest delivery and the server-side cut tie on egress (~13 KB/s per client); broadcast is approximately 5× worse (the ratio of devices to entry budget, `N/B`); the server-side cut is expected to pay more server CPU at a 60 Hz selection rate, but the magnitude is unmeasured. At 10 Hz the model predicts a near-tie; the CPU comparison is unmeasured.
 2. The server-side cut uniquely provides a hard per-client bound among the S0 packages. That bound is requirement K3, set by the project rather than sourced externally.
 3. The cut's advantage is conditional on a thin client (S2) or scattered, metered consumers (S4). No condition is **fully** anchored at present: S2 lacks a client class; S4's metering is anchored, but its scatter is not (candidate: fleet/maritime).
 4. No published demand was found for the conjunction of bounded, exact, consistent, per-consumer delivery under a live cut. Published demand exists for plain aggregation.
@@ -62,7 +62,7 @@ The same vector is used for every dimension and every package.
 | Metric | Unit | Why it is included |
 | --- | --- | --- |
 | Egress | KB/s per client; $/hour per client | The metered resource in cloud deployment |
-| Server CPU | cores per viewer; $/hour per client | The server-side cut's known ceiling |
+| Server CPU | cores per viewer; $/hour per client | The server-side cut's expected ceiling; unmeasured |
 | Client memory | MB for metadata and buffers | The cut's client-side claim; binds only for a thin client |
 | Client CPU | ms/frame on the main thread | Thin-client viability |
 | End-to-end latency | p99 ms | Freshness requirement |
@@ -108,7 +108,7 @@ Every figure is labelled as one of:
 - **derived** — computed from anchored parameters and stated assumptions;
 - **assumed** — a modelling choice, disclosed and swept.
 
-No figure in this document is measured today. All quantitative values are derived or assumed, and the measured constants that would convert them into results are identified in §6.4.
+No figure in this document is measured today. All quantitative values are derived or assumed, and the measured constants that would convert them into results are identified in §6.4. TDD and PRD budgets are design targets, not measurements; they are not used as anchors.
 
 ### 2.6 Anti-tuning
 
@@ -174,7 +174,7 @@ A mid-size industrial site: approximately 10,000 devices (≈30,000 tags), three
 
 **Note on the value width.** f16 is not used. It is a graphics and machine-learning format with no half-float type in any mainstream telemetry protocol, and its precision sits at the scale of an ε threshold, where it would manufacture or mask changes. The choice supersedes the f16 anchor in DISCUSSION-SUMMARY §13; because every package uses the same width, the ratio and ranking are unchanged.
 
-**Note on the CPU.** The per-entry cost coefficients are stated for a ~3 GHz class core. Sustained clock varies on shared cloud VMs and IPC varies across architectures, so the CPU figures are indicative. A clock change scales every package's CPU cost uniformly and does not change the ranking; a measured benchmark must fix the host (TDD §16.1).
+**Note on the CPU.** The per-entry cost coefficients are **assumptions**, not measurements; TDD budgets are design targets, not anchors. They are stated for a ~3 GHz class core. Sustained clock varies on shared cloud VMs and IPC varies across architectures, so the CPU figures are indicative model outputs. A clock change scales every package's CPU cost uniformly and does not change the ranking; a microbenchmark on a fixed host is required before the CPU figures are used as results (TDD §16.1 is a plan, not a source).
 
 ### 3.2 Anchored variants
 
@@ -198,7 +198,7 @@ A mechanism's benefit is meaningful only when exercised at the operating point (
 | S0 | Only when the view exceeds ~1/5 of the site (§56) | Modestly; metered, 10 viewers | No; ~4 MB on a laptop | No; ~0.25 core at V = 10 |
 | S1 | Same | No; unmetered LAN | No | No |
 | S2 | Same | Yes | Yes, by definition | Maybe |
-| S3 | Same | Yes | No | Not at V = 100; ~1/3 of the ~320-viewer wall at 60 Hz |
+| S3 | Same | Yes | No | Not at V = 100; ~1/3 of a model wall (~235–570 viewers, unmeasured) at 60 Hz |
 | S4 | Same | Yes | No | No |
 
 The base scenario has no mechanism that binds hard. That is the central analytical point: at the S0 operating point, the engine's guarantees are tail value, valuable only if the cap is required.
@@ -209,60 +209,64 @@ The scenario was fixed before the comparison was run. The answer-shaping paramet
 
 ## 4. Design dimensions
 
-Each dimension is compared independently as rationale. The package comparison in §5 is the level at which a verdict is valid, because several dimensions are coupled.
+Each dimension is compared as rationale. The package comparison in §5 is the level at which a verdict is valid, because several dimensions are coupled.
 
 The dimensions follow the delivery pipeline:
 
 | Layer | Question | Dimensions |
 | --- | --- | --- |
-| Selection | Which entries are delivered, and who decides? | §4.1 model, §4.2 placement |
+| Selection | Which entries are delivered, who decides, and where? | §4.1 model and placement (§4.2 notes) |
 | Implementation | How is the selection built? | §4.3 library or own, §4.4 substrate |
 | Aggregation | What is computed alongside the selection? | §4.5 (coupled to selection) |
-| Delivery | How are the selected entries framed and encoded? | §4.6 transport, §4.7 encoding |
+| Delivery | How are the selected entries framed and encoded? | §4.6 transport and encoding (§4.7 notes) |
 | Retention | What does the client hold? | §4.8 memory strategy |
 
-Dimensions in **different** layers are orthogonal: any selection model can be paired with any transport and any encoding. Columns within a dimension are alternatives; dimensions may be orthogonal even within a layer (§4.1). The layering is why §4.1 and §4.6 are separate sections despite both concerning delivery — one selects the set, the other frames its bytes.
+Dimensions in **different** layers are orthogonal: any selection model can be paired with any transport and any encoding. Within a dimension, the columns are alternatives; dimensions may also be orthogonal within a layer. §4.1 compares the selection model and its placement together; §4.6 compares transport and encoding together. The layering is why selection and delivery remain separate: one chooses the set, the other frames its bytes.
 
 Figures in §4–§5 are derived or assumed at S0; none are measured.
 
-### 4.1 Selection model
+### 4.1 Selection: model and placement
 
-The delivered set is determined by the camera, by the consumer, or by nobody. Rendering selection — what to draw — is always the client's and always present; this section concerns delivery selection — what is sent — which is the design choice.
+The delivered set is determined by the camera, the consumer, or nobody; placement decides where that selection runs. Rendering selection — what to draw — is always the client's and always present; this section concerns delivery selection — what is sent.
 
-| Criterion | Geometric (view-dependent) | Explicit (direct select) | None (broadcast) |
-| --- | --- | --- | --- |
-| Decides relevance | Camera | User | Nobody |
-| Camera loop | Only if the selection runs server-side (§4.2) | No | No |
-| Egress at S0 | Bounded only if server-side | Subtree-sized | O(N) |
-| Server CPU | Per-viewer cut if server-side, otherwise fan-out or routing (§4.2) | Routing | Fan-out |
-| Client memory | O(N), or O(B) with lazy manifest | O(subset) | O(N) |
-| Client cull per frame | O(B) if server-side; otherwise the source set | O(subtree) | O(N) |
-| Bound | Only if server-side | Soft | None |
-| Advantages | Relevance without asking; LOD and blending | Simple, deterministic; works off-screen | Simplest; client can verify |
-| Costs | If server-side: camera loop and per-viewer CPU; hysteresis and oracle complexity in either case | No free-camera relevance | Unbounded egress |
-| Limits | Requires a bound to be justified | Caps at the root; no free camera | Fails metered or scattered consumers |
-| Verdict at S0 | Justified only under a bound; otherwise the client renders broadcast state | Preferred where consumers name what they need | Baseline for a capable client |
+| Model + placement | Delivered set | Membership | Supported transports | Server CPU (unmeasured) | Client memory | Latency | Bound | Verdict / role |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Geometric + client (broadcast source) | all state; client computes the frontier | static (delivery); dynamic (render) | full-state snapshot; full-state batched delta | fanout only | O(N) | local | none | client cut; no egress bound |
+| Geometric + client (subscription) | frontier (client-selected) | dynamic | frontier snapshot; frontier batched delta; subscription | routing | O(N) manifest + O(B) frontier | subscription round trip | soft (α) | D2f; ties D3 on egress; CPU advantage expected but unmeasured |
+| Geometric + server | frontier | dynamic | frontier snapshot; frontier batched delta | cut+encode; model 0.014–0.034 core/viewer at 60 Hz (unmeasured) | O(B) with lazy manifest; O(N) otherwise | camera path | hard | only under a hard bound or thin client |
+| Explicit + client | subscribed subtree | dynamic on subscription | subtree snapshot; subtree batched delta; subscription | routing | O(subtree) | local | soft | inspection |
+| Explicit + server | subscribed subtree | dynamic on subscription | subtree snapshot; subtree batched delta; subscription | routing | O(subset) | round trip | soft | D6; drill-down |
+| None (broadcast) | all state | static | full-state snapshot; full-state batched delta; single broadcast topic | fanout only | O(N) | local / network | none | baseline at S0; wins S1 |
 
-**The model and the placement are orthogonal (§4.2).** A geometric selection can be computed on the server, on the client, or split between them. The rows above that concern server load, egress, client memory, and client cull are therefore **conditional**: if the selection runs on the client, the server's cost is fan-out or routing, no camera uplink is needed, and the delivered set is the source set rather than the frontier. Only the first rows — who decides relevance, and what the consumer must supply — are intrinsic to the model. §4.2 resolves the placement; §5 combines the two.
+**Reading the table.** The model and placement are orthogonal: geometric can run on the client or server; explicit is a subscription, not a cut; none has no placement decision. The table therefore lists coherent combinations, not alternatives among model, placement, and transport. Server CPU is qualitative and unmeasured: fanout/routing for client/explicit, cut+encode for server. The server-cut range is a model hypothesis, not a measurement.
+
+**Transport compatibility.** Transport is a separate dimension (§4.6). This column lists compatible transports, not a ranking; per-value delta is excluded throughout. Actual egress at S0 is in §5.3, where the set size and transport are stated.
+
+**Model notes.**
+- Geometric buys relevance without asking and LOD/blending; server-side it costs the camera loop and per-viewer CPU, and it needs hysteresis and oracle parity either way.
+- Explicit is simple, deterministic, and works off-screen; it caps at the root and has no free-camera relevance.
+- None is simplest and client-verifiable; its egress is unbounded.
+- **Geometric + client (broadcast source) and None have the same delivered set.** The difference is that the client performs a geometric cut for rendering; neither reduces egress.
+- Only geometric and explicit define a per-consumer set that can be used as a subscription. None degenerates to a single broadcast topic.
+
+**Membership and transport.** Membership belongs to the delivered set, not to the model alone. None and geometric + client broadcast are static for delivery (the rendered frontier is dynamic). Geometric + client (subscription, D2f), geometric + server, and explicit are dynamic. A static set can use a flat array; a dynamic set needs identity or a slot table, `appeared`/`removed`, and keyframes. This is why transport remains a separate dimension in §4.6: it composes with every row.
+
+**Client placement has two delivery variants.** The broadcast-source row sends all state. The D2f row has the client compute the frontier and subscribe to it, so the delivered set is the frontier with a soft bound; the client still holds the manifest unless a lazy structure is used. Both are client placement; the difference is delivery, not selection.
+
+### 4.2 Selection placement: conditional effects
+
+The placement columns are part of the combined table in §4.1. The conditional effect is that client placement cannot reduce egress, while server placement can bound it but pays per-viewer CPU. A server-coarse/client-fine split is a hybrid variant, not a separate placement; it is not evaluated here.
+
+- **Client placement** does all selection locally; it cannot reduce egress, because culling happens after the bytes leave the server.
+- **Server placement** produces a hard bound but pays per-viewer CPU and the camera path.
+
+**Two criteria from the separate tables are now implicit.** A camera loop exists only when geometric selection runs server-side — geometric + server; client placement does not need one, and explicit/none never do. Client cull per frame follows the delivered set: O(B) for geometric + server, O(N) for geometric + client and none, O(subtree) for explicit.
+
+The placement choice changes the ranking only jointly with deployment, the client-memory bound, and the consumer profile. At S0 no mechanism binds hard, so neither placement is forced by load.
 
 **Rendering selection is always present.** Whatever the delivery model, the client frustum-culls and levels the scene for drawing, using library math or its own code (§4.3, §4.4). The models differ only in whether the client holds the data to perform it: under geometric delivery the server performs the selection and sends the resulting set, so the client draws it directly; under explicit delivery the client receives the named subtree and culls it locally; under broadcast it culls the whole state locally. The choice is therefore not whether selection happens, but whether it is duplicated on the server, and which side pays — the trade recorded above as server CPU against client memory and client CPU.
 
 The data and aggregation are view-independent; only the selection is view-dependent, and whether its delivery is geometric depends on the bound rather than on the visualization.
-
-### 4.2 Selection placement
-
-| Criterion | Client | Server | Split |
-| --- | --- | --- | --- |
-| Egress at S0 | Unchanged (O(N) or subscribed) | ~13 KB/s | Bounded coarse |
-| Server CPU | ~0 | 0.025 core/viewer at 60 Hz; ~0.004 at 10 Hz | Low |
-| Client memory | O(N) tree plus metadata | O(B) only with the lazy manifest | O(coarse) |
-| End-to-end latency | No camera round trip | Camera path | Mixed |
-| Bound | No | Yes | Partial |
-| Advantages | Cheap; no per-viewer CPU | Hard bound; exact rollup of the unseen | Balances both |
-| Costs | Cannot reduce egress | Per-viewer CPU; camera loop | Two mechanisms to maintain |
-| Limits | Client culling does not reduce egress | Justified only by a hard bound or thin client | Complexity without a clear claim |
-| Verdict at S0 | Sufficient | Only if a hard bound is required | Not justified here |
-| Changes ranking? | Yes, jointly with the client-memory bound | | |
 
 ### 4.3 Selection implementation
 
@@ -301,33 +305,29 @@ Selection and aggregation placement are coupled. Client-side aggregation require
 | Aggregation of the unseen | Exact, server-side | Impossible without the unseen children |
 | Cross-viewer consistency | Shared snapshot | Lost unless separately coordinated |
 | Feasibility | Compatible with all selection models | Only with broadcast or coarse interest |
-| Verdict | Required if aggregation of the unseen is a requirement | Not independent of §4.1–4.2 |
+| Verdict | Required if aggregation of the unseen is a requirement | Not independent of §4.1 |
 
 The requirement itself is the open question. The coupling constrains the design space but does not establish a need.
 
-### 4.6 Transport
+### 4.6 Delivery: transport and encoding
 
-| Criterion | Full snapshot | Batched delta | Per-value delta |
+Transport and encoding are separate choices but are coupled through membership. The rows are transports; the columns are encodings.
+
+| Transport | Flat fixed-set | Self-describing record | Slot table + flat |
 | --- | --- | --- | --- |
-| Egress at S0 (p = 0.5) | ~122 KB/s | ~65 KB/s | ~14× inflation from headers |
-| Header overhead | Amortised (~0.04% of the full state) | Amortised | ~52 B per message |
-| Consistency | Trivial | Requires frame discipline | Requires frame discipline |
-| Verdict | Baseline | Reduces magnitude, not ranking | Excluded |
+| Full snapshot | best for full state (~122 KB/s) | fallback | possible; ~26 KB/s for a frontier snapshot |
+| Batched delta | fixed set only (~65 KB/s full state) | workable | best for a dynamic frontier (~13 KB/s) |
+| Per-value delta | excluded (~52 B header per value) | excluded | excluded |
 
-Batching is a requirement, not an optimisation: per-value messages carry approximately 52 B of IP overhead (WS 2 + TCP ~30 with options + IPv4 20; §11, §73). `p` is not free: `p ≈ min(1, r/egress) × noise_pass`, so at high r the delta approaches the snapshot.
+**Header overhead.** Batching is a requirement, not an optimisation: per-value messages carry approximately 52 B of IP overhead (WS 2 + TCP ~30 with options + IPv4 20; §11, §73). One full snapshot amortises the header to ~0.04% of the full state; a per-value delta inflates a 4 B value to ~14×. `p` is not free: `p ≈ min(1, r/egress) × noise_pass`, so at high r the delta approaches the snapshot.
 
-### 4.7 Encoding
+**Consistency and verdict.** A full snapshot is trivially consistent; batched and per-value deltas require frame discipline. Full snapshot is the baseline, batched delta reduces magnitude without changing the ranking, and per-value delta is excluded.
 
-| Criterion | Flat fixed-set | Self-describing record | Slot table plus flat |
-| --- | --- | --- | --- |
-| Identity cost | None; layout from manifest | 1–2 B per sent entry | 1–2 B per membership change |
-| Per-tick cost | Values only; bitmap for changes | Flags/mask plus changed values plus attention | Bitmap P/8 plus mask plus changed values |
-| Best when | Set is fixed | Few entries change, or membership churns | Many entries change, membership stable |
-| Limitation | Requires a fixed layout | Identity cost on every record | Slot-table desync requires a keyframe |
-| S0 cost | ~65 KB/s (delta) for the full state | ~15 KB/s for the frontier | ~13 KB/s for the frontier |
-| Changes the ranking? | No | No | No |
+**Membership, not delta, makes a set dynamic.** A full frontier snapshot still requires identity or a slot table; a full global state does not. A fixed set can use a flat value array; a dynamic set needs a slot table or self-describing records, and a keyframe on desync.
 
-Membership, not delta, makes a set dynamic. A full frontier snapshot still requires identity or a slot table; a full global state does not. Appendix B gives worked byte-level examples.
+### 4.7 Encoding: alternatives and costs
+
+The encoding alternatives are the columns of the matrix in §4.6. Flat fixed-set has no identity cost and requires a fixed layout. Self-describing records pay 1–2 B of identity per sent entry and are best when few entries change or membership churns. Slot table plus flat pays identity only on membership change, is best when many entries change but membership is stable, and requires a keyframe on desync. For the frontier delta at S0, self-describing records cost ~15 KB/s and the slot table ~13 KB/s. Neither choice changes the ranking; it changes absolute bytes. Appendix B gives worked byte-level examples and the S0 costs.
 
 ### 4.8 Client-memory strategy
 
@@ -373,19 +373,21 @@ Assumptions: f32 values, m = 3, c = 3, G = 180, p = 0.5 assumed, 1 Hz egress. Se
 
 **Dominance set.** D6 serves an explicitly named subtree, so it is outside the S0 dominance set: it is the baseline for the guided-view case, not a free-camera package. D1–D5 meet the S0 consumer requirement.
 
-| Package | Egress per client | Egress $/hour | Server cores per viewer | Client CPU (ms/frame) | Client memory | p99 latency (ms) | Bound | Consistency | Build (h, marginal) |
+| Package | Egress per client (scope) | Egress $/hour | Server CPU (unmeasured) | Client CPU (ms/frame) | Client memory | p99 latency (ms) | Bound | Consistency | Build (h, marginal) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| D1 | 65 KB/s | 0.021 | ~0.002 | ~0.5–2 | ~4 MB | ~1,020–1,080 | No | Yes | ~10 |
-| D2f | 13 KB/s | 0.0042 | ~0.003 | ~0.3–1 | ~4 MB + frontier (~0.1 MB) | ~1,050–1,150 | Soft | Yes, with keyframe | ~20 |
-| D2c | 33 KB/s | 0.011 | ~0.003 | ~0.5–2 | ~4 MB + region (~0.1–0.2 MB) | ~1,050–1,150 | Soft | No unless snapshotted | ~15 |
-| D3 | 13 KB/s | 0.0042 | 0.025 at 60 Hz | ~0.1–0.3 | ~4 MB | ~1,020–1,100 | Yes | Yes | ~70 |
-| D4 | 13 KB/s | 0.0042 | 0.025 at 60 Hz | ~0.1–0.3 | ~0.05–0.1 MB descriptors; ~0.1–0.4 MB total | ~1,050–1,200 | Yes | Yes | ~85 |
-| D5 | 65 KB/s divided by cluster | 0.021 divided by k | ~0.002 | ~0.5–2 | ~4 MB | ~1,030–1,100 | No | Yes | ~20 |
-| D6 | 4 KB/s | 0.0013 | Routing | ~0.1–0.5 | ~subset (~0.1–0.2 MB) | ~1,020–1,080 | Soft | Yes | ~10 |
+| D1 | site-wide; 65 KB/s | 0.021 | fanout only | ~0.5–2 | ~4 MB | ~1,020–1,080 | No | Yes | ~10 |
+| D2f | frontier (B = 2,000); 13 KB/s | 0.0042 | routing | ~0.3–1 | ~4 MB + frontier (~0.1 MB) | ~1,050–1,150 | Soft | Yes, with keyframe | ~20 |
+| D2c | region (~2,750 devices); 33 KB/s | 0.011 | routing | ~0.5–2 | ~4 MB + region (~0.1–0.2 MB) | ~1,050–1,150 | Soft | No unless snapshotted | ~15 |
+| D3 | frontier (B = 2,000); 13 KB/s | 0.0042 | cut+encode; model 0.014–0.034 at 60 Hz | ~0.1–0.3 | ~4 MB | ~1,020–1,100 | Yes | Yes | ~70 |
+| D4 | frontier (B = 2,000); 13 KB/s | 0.0042 | cut+encode; model 0.014–0.034 at 60 Hz | ~0.1–0.3 | ~0.05–0.1 MB descriptors; ~0.1–0.4 MB total | ~1,050–1,200 | Yes | Yes | ~85 |
+| D5 | site-wide; 65 KB/s divided by k | 0.021 divided by k | fanout only | ~0.5–2 | ~4 MB | ~1,030–1,100 | No | Yes | ~20 |
+| D6 | room (~625 devices); 4 KB/s | 0.0013 | routing | ~0.1–0.5 | ~subset (~0.1–0.2 MB) | ~1,020–1,080 | Soft | Yes | ~10 |
 
-**Labels for the new columns.** Client CPU and p99 latency are **assumed order-of-magnitude ranges**, not measurements; they complete the §2.2 vector and are swept. At S0, latency is dominated by the 1 Hz egress cadence (Table 3.2), so the ranges overlap and do not change the ranking; the ~1 s p99 follows from the cadence, not from package latency. D6's lower figures reflect its narrower delivered set, not a free-camera capability.
+**Labels for the new columns.** Server CPU is **unmeasured**; the server-cut range is a model hypothesis, not a result. Client CPU and p99 latency are also assumed order-of-magnitude ranges, not measurements; they complete the §2.2 vector and are swept. At S0, latency is dominated by the 1 Hz egress cadence (Table 3.2), so the ranges overlap and do not change the ranking; the ~1 s p99 follows from the cadence, not from package latency. D6's lower figures reflect its narrower delivered set, not a free-camera capability.
 
 **D2c's build cost.** D2c avoids the shared cut crate (no WASM frontier cut), so its marginal build is ~15 h rather than D2f's ~20 h; that is its surviving trade against D2f.
+
+**Egress scope and transport.** The scope column states the set size: D1/D5 site-wide, D2f/D3/D4 frontier, D2c region, D6 room. Figures are batched delta at p = 0.5 unless stated; snapshot alternatives at S0 are ~122 KB/s for full state, ~26 KB/s for the frontier, and ~7.5 KB/s for the room. At the same room, a geometric server cut culls and blends and should be ≤ D6, unless it duplicates aggregate and raw data or carries a large guard band.
 
 The egress ratio is `N/B`, not a bandwidth saving. Broadcast sends the whole state; the cut sends the frontier. Both scale with the changed fraction, so the ratio cancels `p` and `r`:
 
@@ -398,22 +400,12 @@ At N = 10,000 and B = 2,000 the ratio is 5×. At 100,000 and B = 5,000 it is 20�
 At S0:
 
 - On egress, D2f, D3 and D4 tie at approximately $0.0042 per client-hour (about $3.1 per continuous month). D1 is 5× worse. D6 is cheapest but serves only an explicitly selected subtree.
-- On server CPU, D3 and D4 cost approximately 8× D2f at 60 Hz, narrowing to approximately 1.3× at 10 Hz, within the `b`/`c` uncertainty (a tie within error).
+- On server CPU, the server cut is expected to cost more than routing; the magnitude is unmeasured. The model range is 0.014–0.034 core/viewer at 60 Hz; at 10 Hz the model overlaps routing (a model tie).
 - On client memory, nothing binds: 4 MB is trivial for a laptop. D4's O(B) advantage is real but irrelevant at S0.
 - On the new columns, the ranges overlap. D1/D5 carry O(N) client culling; D2f carries the WASM cut; D2c carries client aggregation; D3/D4 draw only the delivered slice.
-- **No package dominates among D1–D5.** D6 dominates D2f on the printed metrics, but it does not meet S0's free-camera requirement; that is why the requirement is stated formally above.
+- **No package dominates among D1–D5 on the quantified metrics.** CPU is unmeasured, so this is conditional. D6 dominates D2f on the printed metrics, but it does not meet S0's free-camera requirement; that is why the requirement is stated formally above.
 
-**Compute cost.** At $0.044 per core-hour (§2.2), with the selection rates of Table 3.2:
-
-| Package | cores per viewer | $/hour at 60 Hz | at 10 Hz |
-| --- | --- | --- | --- |
-| D1 | ~0.002 | 0.00009 | 0.00009 |
-| D2f, D2c | ~0.003 | 0.00013 | 0.00013 |
-| D3, D4 | 0.025 | 0.0011 | 0.00018 |
-| D5 | ~0.002 | 0.00009 | 0.00009 |
-| D6 | ~0.003 | 0.00013 | 0.00013 |
-
-At 60 Hz the cut's compute is about 27% of its egress; at 10 Hz it is about 4%. Two caveats apply. First, cloud billing is per instance-hour, so at V = 10 the cut's 0.25-core load is served by a 2-vCPU instance costing $0.021–0.041 per hour, an attributable $0.0021–0.0041 per client-hour, comparable to the egress rate; the marginal rates apply above roughly V = 100. Second, a rented core is usually a hyperthread; if physical cores are meant, the rate doubles and the 320-viewer wall halves. Neither changes the ranking, because compute and egress both scale with a package's work. Totals scale with connected hours: an 8 h/day duty cycle is one third of continuous operation, and the provider free allowance may absorb most of the remainder.
+**CPU cost is not computed.** `b` and `c` are unmeasured, so per-package CPU dollars are not results. The model form is `cores ≈ (T_cut + T_encode) × selection_rate`; a microbenchmark on a fixed host is required. The instance-hour caveat still applies: at low V, the smallest available instance sets a floor; above roughly V = 100, the marginal rates are more meaningful. A rented core is usually a hyperthread; if physical cores are meant, the rate doubles. Totals scale with connected hours: an 8 h/day duty cycle is one third of continuous operation, and the provider free allowance may absorb most of the remainder.
 
 ### 5.4 Comparison under the variants
 
@@ -421,16 +413,16 @@ At 60 Hz the cut's compute is about 27% of its egress; at 10 Hz it is about 4%. 
 
 | Variant | Preferred | Not preferred | Reason |
 | --- | --- | --- | --- |
-| S1 edge/LAN | D1 on cost and latency | D3, D4 (CPU), D5 (no benefit) | Bytes are unmetered and latency is ~1 ms |
+| S1 edge/LAN | D1 on cost and latency | D3, D4 (expected CPU; unmeasured), D5 (no benefit) | Bytes are unmetered and latency is ~1 ms |
 | S2 thin client | D4 on memory; D2f approaches O(B) only via a coarse-top lazy descent, at round-trip cost | D1, D2c, D3 | Strict O(B) memory requires server-side selection; D2f's approximation adds latency |
-| S3 high fan-out | D2f on CPU, narrowly (within `b`/`c` uncertainty) | D3, D4 (rising CPU, still ~1/3 of the wall at V = 100) | Per-viewer cut cost is linear in V; routing is not |
+| S3 high fan-out | D2f on CPU (model; unmeasured) | D3, D4 (rising CPU, still ~1/3 of the model wall at V = 100) | Per-viewer cut cost is linear in V; routing is not |
 | S4 scattered metered | D3, D4 on egress; D2f ties | D1, D5 | A relay cannot amortise without a shared point of presence |
 
 ### 5.5 Verdict
 
 The engine's advantage is conditional, and **no condition is fully anchored**.
 
-- It never dominates. D2f ties it on egress in every variant and is cheaper on CPU at 60 Hz (a tie within error at 10 Hz). D1 is cheaper to build and wins in S1.
+- It never dominates on the quantified metrics. D2f ties it on egress in every variant and is expected to be cheaper on CPU at 60 Hz (model; unmeasured); at 10 Hz the model is a tie. D1 is cheaper to build and wins in S1.
 - It uniquely supplies a **hard per-client bound among the S0 packages**. Exact aggregation of the unseen and a shared cross-viewer snapshot accompany it but are not unique: D2f and D6 also aggregate server-side, and a broadcast snapshot is shared. None of the three is sourced externally: the bound is self-set (K3), and consistency and exactness are properties of a centralised design rather than demands (§39, §64).
 - The strongest surviving claim is therefore the hard bound, and it is a self-set product requirement rather than a sourced one.
 - The demand test fails for the conjunction. Published demand exists for aggregation, not for bounded, exact, consistent, per-consumer delivery under a live cut.
@@ -439,7 +431,7 @@ The engine's advantage is conditional, and **no condition is fully anchored**.
 
 ### 6.1 Result
 
-Under S0 the server-side cut is a bounded middle: more expensive on CPU than fine interest, less expensive on egress than broadcast, and the only package with a hard bound. It is not the cheapest design and is not necessary at the base scenario.
+Under S0 the server-side cut is a bounded middle: expected to be more expensive on CPU than fine interest, less expensive on egress than broadcast, and the only package with a hard bound. It is not the cheapest design and is not necessary at the base scenario.
 
 If the consumer instead names what it needs — a guided view, a drill-down — D6 serves it at ~4 KB/s with commodity aggregation and requires no cut. The engine's niche is therefore the free-camera case under a hard bound or a thin client, not visualization as such: in the natural visualization deployment (S1: GPU laptops in a control room on a LAN), broadcast with a client cut is the cheapest design.
 
@@ -481,7 +473,7 @@ A universal gap is evidence of absent demand more often than of unmet need. The 
 | A thin-client class with a hard bound | An embedded HMI or kiosk with a small metadata budget | D4 wins S2 outright; the claim becomes anchored |
 | The hard bound is required | A sourced requirement rather than K3 | The bound moves from tail value to requirement |
 | Demand for the conjunction | A published complaint or a standard | The justification strengthens |
-| Selection rate and camera motion | 10 Hz slow pan rather than 60 Hz free camera | D3's CPU disadvantage narrows to ~1.3×, within `b`/`c` uncertainty |
+| Selection rate and camera motion | 10 Hz slow pan rather than 60 Hz free camera | The model's CPU gap narrows; the CPU comparison is unmeasured |
 | Measured constants b, c, p | Any values | Converts estimates into results; does not change the ranking |
 | Real cloud prices | $0.05–0.12/GB | Confirms or weakens the egress case; the ranking is robust |
 
@@ -493,6 +485,7 @@ A universal gap is evidence of absent demand more often than of unmet need. The 
 - No stakeholder is available; a host laboratory is the realistic source of data or hardware.
 - The comparison assumes the hierarchy is spatial and immutable at boot.
 - Build estimates are planning figures, not measured effort.
+- CPU is unmeasured; `b` and `c` are assumptions, and TDD/PRD budgets are design targets, not measurements.
 - The S0 consumer profile is assumed, not anchored; the free camera is the engine's niche case, not the modal consumer.
 - D2f's O(B) approach is a coarse-top lazy descent with a round-trip cost, not strict O(B) memory.
 - B1, the composition baseline, is not quantified in Table 5.3.
@@ -579,7 +572,7 @@ Worked cases:
 | Marker legibility | ~32 px on 1080p, B ≈ 2,000 | §13 |
 | Cloud egress | $0.05–0.12/GB | §14 |
 | IP overhead | ~52 B per message (WS 2 + TCP ~30 with options + IPv4 20) | §11, §73 |
-| Cut and encode cost | b ∈ [0.06, 0.19] µs/entry; c ∈ [0.03, 0.07] µs/entry, at ~3 GHz | §12 |
+| Cut and encode cost | Assumed ranges b ∈ [0.06, 0.19] µs/entry; c ∈ [0.03, 0.07] µs/entry, at ~3 GHz (not measured) | §12; TDD budgets are targets |
 | LAN and WAN latency | ~1 ms; 20–80 ms (WAN 10–100 ms in §14) | §13, §14 |
 | Egress ceiling | 1 GbE ≈ 110 MB/s; ~1–2 Mpps | §11 |
 
