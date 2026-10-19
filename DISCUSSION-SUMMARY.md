@@ -3,12 +3,12 @@
 | Field | Value |
 | --- | --- |
 | Document | DISCUSSION-SUMMARY |
-| Date | 2026-10-17 (seven sessions: 2026-10-12, 2026-10-13, 2026-10-14, 2026-10-15, 2026-10-16 ×2, 2026-10-17) |
+| Date | 2026-10-19 (nine sessions: 2026-10-12, 2026-10-13, 2026-10-14, 2026-10-15, 2026-10-16 ×2, 2026-10-17 ×2, 2026-10-18→19) |
 | Subject | Review of a proposed final-year project: server-side spatial filtering engine for 3D digital twin visualization |
 | Artifacts reviewed | `docs/PRD-001__Product_Requirements_Document.md`, `docs/TDD-001__Technical_Design_Document.md`, `docs/PLN-001__Master_Execution_Sequence.md` |
 | Participants | Supervisor (critic) and student (author) — roles later swapped into a viva-style exchange |
 
-This document records the discussion so it can be resumed later. **Part I (§1–§8)** captures the initial evaluation, the student's defence, the technical findings, and the reframe that emerged. **Part II (§9–§20)** records a second session that resumed from the open questions in §7 and carried the work forward into a concrete baseline, a cost model, and a deployment-scenario reframe. **Part III (§21–§33)** records a third session that examined a domain pivot (to "IoT"), pinned down what "the cut is solved" means and which libraries implement it, worked through a client-side cut mechanised with a tiles library and its pub/sub variant, and ended in a viva-style examination that rejected the crossover framing and produced a proposed reposition. **Part IV (§34–§47)** records a fourth session: a continued viva in which the student conceded the original proposal, established that COMP4299 permits a system-development project, and then explored the problem-first discipline — re-skinning versus anchoring, the failing-baseline test, candidate pain points, the uplink-versus-egress and edge-versus-cloud distinctions, the field-technician scenario, and the Google-Maps analogy — arriving at a working framing. **Part V (§48–§78)** records a fifth session (2026-10-16): the testing of the framing's load-bearing claims (all of which fail in the natural setting), the audit of the best-of-breed libraries and their universal gaps, the assessment of two domain pivots (dashboards and smart city), the supervisor's challenges, the recalibration of the bar for COMP4299, the reframed system-development project, the 19-week feasibility audit, and the concrete mechanics of the cut and of delivery — arriving at a provisional candidate and an explicit set of gates. **Part VI (§79–§92)** records a sixth session (2026-10-16, continuing): the engine's status review, the catalogue of six arXiv papers and one repository read during the session and the pattern they reveal, the recommendation on the engine's disposition, and the turn to finding a *system-development* topic — the module's criteria, the sources and methods for locating one, the four-part filter, and the strongest candidates (a drift-aware twin; a DT-drift-management project). **Part VII (§93–§98)** records a seventh session (2026-10-17): the drift topic subjected to the same critique that killed the engine; the resolution of the recurring **"it sounds trivial"** reaction (separating *novelty* from the module's bar); the **track decision** (system-development vs research) as the gate; a **calibration survey of IoT scenarios** (device counts, rates, EPS, links); and an explicit **state and gates** section so a new Plan agent can resume. It is a record, not an instruction to change the design documents. All numerical results in Part II through Part VII are **first-principles estimates conditioned on stated constants**, not measurements; the constants are named where they must be measured before use.
+This document records the discussion so it can be resumed later. **Part I (§1–§8)** captures the initial evaluation, the student's defence, the technical findings, and the reframe that emerged. **Part II (§9–§20)** records a second session that resumed from the open questions in §7 and carried the work forward into a concrete baseline, a cost model, and a deployment-scenario reframe. **Part III (§21–§33)** records a third session that examined a domain pivot (to "IoT"), pinned down what "the cut is solved" means and which libraries implement it, worked through a client-side cut mechanised with a tiles library and its pub/sub variant, and ended in a viva-style examination that rejected the crossover framing and produced a proposed reposition. **Part IV (§34–§47)** records a fourth session: a continued viva in which the student conceded the original proposal, established that COMP4299 permits a system-development project, and then explored the problem-first discipline — re-skinning versus anchoring, the failing-baseline test, candidate pain points, the uplink-versus-egress and edge-versus-cloud distinctions, the field-technician scenario, and the Google-Maps analogy — arriving at a working framing. **Part V (§48–§78)** records a fifth session (2026-10-16): the testing of the framing's load-bearing claims (all of which fail in the natural setting), the audit of the best-of-breed libraries and their universal gaps, the assessment of two domain pivots (dashboards and smart city), the supervisor's challenges, the recalibration of the bar for COMP4299, the reframed system-development project, the 19-week feasibility audit, and the concrete mechanics of the cut and of delivery — arriving at a provisional candidate and an explicit set of gates. **Part VI (§79–§92)** records a sixth session (2026-10-16, continuing): the engine's status review, the catalogue of six arXiv papers and one repository read during the session and the pattern they reveal, the recommendation on the engine's disposition, and the turn to finding a *system-development* topic — the module's criteria, the sources and methods for locating one, the four-part filter, and the strongest candidates (a drift-aware twin; a DT-drift-management project). **Part VII (§93–§98)** records a seventh session (2026-10-17): the drift topic subjected to the same critique that killed the engine; the resolution of the recurring **"it sounds trivial"** reaction (separating *novelty* from the module's bar); the **track decision** (system-development vs research) as the gate; a **calibration survey of IoT scenarios** (device counts, rates, EPS, links); and an explicit **state and gates** section so a new Plan agent can resume. It is a record, not an instruction to change the design documents. **Part VIII (§99–§116)** records an eighth session (2026-10-17, continuing): the closure of the **track gate** (system-development); the exploration of candidates beyond the drift topic under the student's declared **absence of stakeholder access** (laptop-only); the assessment of a **campus digital-twin-with-dashboard** proposal and of **AI-model integration**; a **feature-request hunt across the competitor repositories** (the demand test the review had lacked); a **design-space comparison** of the candidate architectures for the professor; and a sharpening of the **cut** taxonomy — **placement versus implementation**, the **shared-crate control**, **direct select**, **view-independence**, the **delivery/rendering separation**, **compaction**, and **client memory as the surviving justification** — closing on the shared **"does it bind?"** value and the **nice-to-have** question. **Part IX (§117–§141)** records a ninth session (2026-10-17 → 2026-10-19): the **defensibility** questions (the data-centre twin, CRUD, mature solutions, the salon-booking case, FYP versus product, what one citation buys); the **privacy/disclosure** direction worked to a concrete problem, fourteen requirements, and a key extension (online hierarchical statistical disclosure control + a reconstruction adversary); the reading and positioning of **SHIP** and the **hierarchical edge-IoT security-monitoring** paper; the **supervisor's profile and authorship**; whether the **engine fits** those applications or has **résumé value**; and **IoT telemetry upload and trust**. All numerical results in Part II through Part IX are **first-principles estimates conditioned on stated constants**, not measurements; the constants are named where they must be measured before use.
 
 ---
 
@@ -1300,3 +1300,252 @@ Indicative ranges (not sourced; anchor to a specific deployment before use):
 **What a new Plan agent should do.** Ask **which track** and **which candidate** the student is on; then help **name and reach a stakeholder** and **draft the candidate paragraph** for the supervisor. Do not re-litigate the engine unless asked; do not let the conversation drift back into "find a domain for the engine" (§36). The recurring trap is now well documented: **every candidate will "sound trivial" until the track and the stakeholder are fixed** — so fix those first, and judge the topic on *stakeholder + evaluation*, not novelty.
 
 **Bottom line:** the discussion has moved from **"can the engine be defended?"** (answer: not as a problem; only as a stated-requirement engineering project, and at high cost) to **"which system-development topic has a real stakeholder and a measurable evaluation?"** — with the **drift-aware twin** as the primary candidate, **accessibility** as the strongest human-centred alternative, and **extending a supervisor topic** as the pragmatic fallback.
+
+---
+
+# Part VIII — Track closure, the competitor hunt, the design space, and the cut (eighth session)
+
+Part VIII records an eighth session (2026-10-17, continuing). It closes the **track gate** (system-development); records the candidate exploration beyond the drift topic and the student's declared **absence of stakeholder access**; assesses a **campus digital-twin-with-dashboard** proposal and the question of **AI-model integration**; reports a **feature-request hunt across the competitor repositories** — the demand test the review had lacked — and its verdict; and works through the **design space** and the **cut** in depth: placement versus implementation, the shared-crate control, **direct select**, **view-independence**, the **delivery/rendering separation**, **compaction**, and **client memory as the surviving justification**. It closes on the shared **"does it bind?"** value and on whether a **nice-to-have** can justify a project or a product. Section numbers continue from §98. As in Parts II–VII, all figures are first-principles estimates against stated constants, not measurements.
+
+## 99. Orientation
+
+The session resumed from §98's state-and-gates. Two things changed the picture. First, the student **closed the track gate**. Second, the engine was re-examined with a new instrument — **the competitor repositories' feature requests** — and with a sharper account of the **cut's design space**. The method was unchanged: apply the critique that killed the engine to every candidate, and do not re-skin.
+
+## 100. The track decision (the gate of §96 closes)
+
+The student committed to the **system-development** track (COMP4299). Consequences recorded: **novelty is not required**; depth must come from a **stakeholder** and a **rigorous evaluation**; the engine remains admissible as a **stated-requirement engineering project**, not as a research contribution. The gate of §96/§98.1 is closed. Caution recorded: choosing the track fixes the *bar*, not the *topic* — it does not by itself make any candidate defensible.
+
+## 101. Candidate exploration and the access constraint
+
+Asked to develop a candidate beyond the drift topic, the student explored alternatives rather than committing, and declared two hard constraints: **no reachable stakeholder** and **laptop-only** (no hardware, no institutional data). The lanes were triaged by what the constraint kills:
+
+| Lane | Verdict under "laptop-only, no access" |
+| --- | --- |
+| Accessibility / assistive | **blocked** — verification *is* user testing |
+| Learning / education | **blocked / weak** — same reason |
+| Campus / dept tooling | **weakened** — needs a champion and institutional data |
+| Embedded / sensing | **blocked** — no host site, no devices |
+| Security / privacy | partly open — public corpora, no participants |
+| Public / open data | open — the dataset substitutes for access |
+| Developer / ops tooling | open — OSS issue trackers are reachable online |
+| Simulation / benchmark systems | open — but this is the engine's shape |
+
+Recorded: **the stakeholder is the scarce resource**; with none, the **external anchor** — a public dataset, a standard, a published complaint — must carry the justification (§41). The student **declined to test the no-access assumption** (declined to spend a short, cheap effort asking around), so the anchor-only route was adopted.
+
+## 102. The campus digital-twin proposal
+
+The student proposed a **campus digital twin with a dashboard**. Verdict: **as stated, not defensible.** It is a *means* statement — an artifact (a twin) and a presentation (a dashboard) — with no problem, stakeholder, or definition of success; twins and dashboards are commodity; and the "digital twin" claim must be **earned** (bidirectional sync / what-if), or the artifact is a map with charts. But the **campus is the nearest stakeholder** (estates, sustainability, IT, accessibility office), so the direction is promising **iff** anchored to a specific, measured pain (energy/carbon, ventilation/CO₂, space utilisation, maintenance, accessibility) and a reachable person; the **extension must be a mechanism**, not a screen. Caution: with no access, a campus twin is a **synthetic twin of the campus** — the engine's invented-scenario trap in a smaller box.
+
+## 103. AI-model integration
+
+The student asked whether **integrating an AI model** into a system like the engine would be defensible. Verdict: **not as "engine + a model."** It touches none of the engine's failures (problem, stakeholder, need); "integrate a model" is a *means*; it adds a second contribution with its own evaluation burden to an already over-budget build; and an AI-centric project risks the **CSAI4299** bar ("clear AI focus") rather than COMP4299's. The test recorded: *is there a requirement only inference can satisfy; can the model's contribution be isolated and measured against a baseline; does the problem survive removing the model; and which module does the result belong to?* Roles graded — learned selection, value imputation (contradicts exactness), anomaly detection (crowded, CSAI-shaped), threshold tuning (thin), forecasting (shifts the topic) — **none rescues the engine**; each either shifts the topic or adds an unrelated contribution. Distinction recorded: **AI as decoration** (a bolt-on) versus **AI as the mechanism for a stated problem** (then the AI problem *is* the topic).
+
+## 104. The competitor feature-request hunt
+
+Method: GitHub issue search scoped to the major competitors, plus direct reads of the salient issues (3D Tiles/Cesium, deck.gl, loaders.gl, Potree, three.js, Eclipse Ditto, FIWARE Orion, ThingsBoard, Materialize/RisingWave/Feldera, Mirror/FishNet, Mapbox tippecanoe, Grafana). Rate-limited, so a **sample, not exhaustive**; **absence of a request is weak evidence**. The target was the engine's **conjunction** — bounded + exact + consistent + per-consumer hierarchical rollups under a **live, view-dependent** selection.
+
+| Competitor | Issue | Age / state | What it asks | What it proves |
+| --- | --- | --- | --- | --- |
+| **Eclipse Ditto** | [#1525](https://github.com/eclipse-ditto/ditto/issues/1525) | 2022-10, **open** (`outlook`) | Aggregation (`mean`/`sum`/`count`) over "hundreds/thousands of selected things" | **Real, dated, unmet demand** — *"We have a clear need to have aggregations … to manage a large fleet of devices."* But **view-independent**; 4 years unbuilt |
+| **Eclipse Ditto** | [#2291](https://github.com/eclipse-ditto/ditto/issues/2291) | 2025-12, open | Timeseries facade | Workaround is **manual TSDB integration** |
+| **FIWARE Orion** | [#3816](https://github.com/telefonicaid/fiware-orion/issues/3816) | 2021-03, **open** | `?aggregate=category&operation=avg:score` | Same shape; workaround: **fetch all entities, aggregate client-side** |
+| **ThingsBoard** | rule-engine `RELATED_ENTITIES_AGGREGATION` | productized | Hierarchical aggregation over the entity tree | The aggregation half is **already productized** |
+| **Mapbox tippecanoe** | [#324](https://github.com/mapbox/tippecanoe/issues/324), [#354](https://github.com/mapbox/tippecanoe/issues/354), [#830](https://github.com/mapbox/tippecanoe/issues/830) | 2016–2020, closed | "Combine features, **aggregate properties** to fit tiles" | **The coupling exists** — `--accumulate-attribute`; **precomputed, shared, offline** |
+| **deck.gl** | [#10795](https://github.com/visgl/deck.gl/issues/10795) | 2026-10, open | "aggregation layers that refine into raw points as you zoom in" | View-dependent aggregation is **solved — a documentation task** |
+| **Cesium** | [#6182](https://github.com/CesiumGS/cesium/issues/6182) | 2018, closed | Aggregate geometries "for different zoom levels" | User built the **workaround himself**; redirected to tile pipelines |
+| **Mirror** | [#3197](https://github.com/MirrorNetworking/Mirror/issues/3197) | 2022, closed | Send state to a **subset of observers** | Per-consumer selection is **solved** (Team Interest Management) |
+| **Grafana** | [#347](https://github.com/grafana/grafana/issues/347) | 2014, closed | Tree explorer of metric keys | The **topic-namespace = tree** idea exists as navigation |
+| **misc** | `autheris` #112 | 2026, open | GraphQL sums/counts per group "without reading every row" | Another live **aggregation-over-hierarchy** request |
+
+## 105. What the hunt establishes
+
+1. **The aggregation half has real, dated, open demand** — the **first published complaints and workarounds** in the entire review, in the users' own words (§63's missing evidence).
+2. **The view-dependent coupling is already solved wherever content is *shared*** — tippecanoe `--accumulate-attribute`, Cesium clustering, deck.gl zoom aggregation; **precomputed/offline**, i.e. the Google-Maps case.
+3. **Per-consumer selection is solved** — interest management.
+4. **No published demand for the conjunction** — bounded + exact + consistent + per-consumer, coupled to a live cut; nor for cross-consumer snapshot consistency; nor for a hard per-consumer bound.
+
+**Net:** the demand is for **aggregation, not the coupling** — the engine's residue is **unrequested**. This **corroborates and sharpens** §83/§92 rather than overturning them. Assets produced: citable **related work** (stated needs and workarounds); a narrower **live-aggregation-service** framing; and the material for the **"why not"** argument every write-up will need. Caution (§63) stands: a gap's **age is not demand** — the Ditto request is four years old and labelled `outlook`; the platforms have declined to pay for it.
+
+## 106. The design-space comparison (for the professor)
+
+The student needed to report **different designs and their pros and cons**. The comparison produced five architectures, plus three layered choices:
+
+- **D1 — Broadcast + client cut** (Regime 1): server fanout only; egress **O(N)/client**; no bound.
+- **D2 — Interest / subscription** (Regime 2): fine (frontier) → egress **≈ D3**; coarse (region) → **> D3**; server CPU ≈ routing; binds on α.
+- **D3 — Server cut** (Regime 3): the only **hard per-client byte bound**; exact server-side aggregation of the unseen; deterministic, oracle-comparable, consistent snapshot; **CPU-bound** (`V_cpu ≈ 74–260`).
+- **D4 — Server cut + lazy manifest** (A′): client **O(B)** instead of O(N); ordinary lazy loading, not novel.
+- **D5 — Broadcast + edge relay**: cuts wide-area egress by the clustering factor; clustered clients only.
+
+Layered choices: **transport** (full snapshot vs batched delta — ~52 B IP overhead makes **batching a requirement**); **aggregation placement** (coupled to selection, not independent); and the **deployment axis** (edge LAN vs cloud/WAN **flips the ranking**; at cloud prices bytes are ~40× the CPU needed to avoid them). The master comparison and the conclusions were recorded: **three designs bind on three different resources**; **deployment decides the winner**; **D3 is a bounded niche**; **the cut is commodity**; and **at reasonable scale a snapshot with a client cut suffices**, so the engine's necessity must come from a **non-performance** constraint. Recorded: this is a **design-space characterisation** — legitimate, but **not novel**.
+
+## 107. The cut, sharpened: placement × implementation, and the substrate
+
+The student proposed **three choices** — client-side library; client-side + own check; server-side + own check. Corrected: these **mix two axes** — **placement** (client / server / split) and **implementation** (library-owned / library + own policy / own) — so the space is closer to a **2×2** than a three-way choice, with the missing cell **server + library** (`loaders.gl` headless; possible, not sensible). Clarified **"own check"**: *own traversal* versus *own policy on library output*; the latter is fragile, because a library selects by **screen-space error** and has already pruned — so the honest client option is **own traversal using library math**. Recorded: **pure client-library is weaker than it sounds** — three.js exposes **no visible set** (one `InstancedMesh` collapses to one test), Cesium `i3dm` is **tile-level**, and **per-node tiles are impractical at 100k**; the realistic client route is **regular cells + own check** (§72's B). The **control** is a **single cut crate compiled native (server) and to WASM (client)**, so **placement is the only variable** and a third-party cut does not confound the comparison.
+
+## 108. Direct select (D6): explicit subtree subscription
+
+The student proposed clicking a room in the hierarchy and receiving all its readings. Classified: an **explicit subtree subscription** — the simplest **Regime 2**, with the subscription chosen by the **user**, not the camera. It is **not a cut**: no view-dependence, no `B` unless imposed. Mechanics: a subtree is a **contiguous preorder range**, so membership is O(1); routing is a **per-node subscriber bitset**; `appeared`/`removed` + keyframe on subscription change; **no camera loop, no frontier, no hysteresis**. Two variants: **flat** (all devices in the subtree) and **progressive drill-down** (aggregates + child summaries; expand on demand — i.e. **manual LOD**). Egress: a benchmark room (~625 devices × 3) ≈ **3.75 KB/snapshot** (~3.75 KB/s at 1 Hz); the **root = broadcast** (~60 KB/snapshot). Pros: trivial, deterministic, works **off-screen**, maps to picking (a blended group's node index → expand), generalises FR-VS-02. Cons: **commodity** (MQTT/Sparkplug/OPC-UA/Ditto/ThingsBoard all do it); **unbounded at the root**; no free-camera relevance; churn on rapid clicking. Consequence: it covers the common **drill-down / inspection** case, so **the cut is unnecessary for inspection**; it is **the honest baseline that narrows D3's niche**; and **cut + direct select compose** (overview + inspection).
+
+## 109. View-dependence: only the selection is view-dependent
+
+Clarified: the **properties are view-independent** — a group's aggregate, its attention/severity, and its device values are the exact rollup of the subtree **regardless of the camera** (which is why aggregation is shared across viewers); only the **selection** is view-dependent, and that is a **delivery/presentation** decision. What view-dependence buys (relevance without asking; a **server-side** egress bound — **client-side culling does not reduce egress**; LOD/blending; "just works") and costs (the camera loop; per-viewer CPU; hysteresis/oracle complexity; latency sensitivity; commodity). The three **selection models** — geometric (camera) / explicit (user/query) / none (broadcast or precomputed) — and the conditions under which geometric selection is genuinely necessary (exploration; scene too large to enumerate; continuous pan/zoom; thin client; metered link; many viewers) versus not (dashboards, drill-down, inspection, alerting, field technicians). Dropping view-dependence leaves **state + hierarchy + aggregation + attention/severity + a subscription/delivery layer** — a smaller, more commodity system, and the shape with published demand.
+
+## 110. Delivery versus rendering selection; colouring and compaction
+
+**Colouring does not require the cut.** Colouring needs (1) the value, (2) a **node → instance mapping**, and (3) the instance in the draw buffer — none of which is a cut. The engine **conflated** **delivery selection** (what to send) with **rendering selection** (what to draw / at what LOD), because the client only held what the server sent. With direct select, delivery is the subscription and rendering is client-side; and if you **render all instances**, `slot = node index` is **static** — **no compaction, no slot table, no per-frame diff**, and picking is `instanceId → node index` directly (the engine needed `slotToNode` *because* the cut compacted). The engine's "40 MB client" is the **full manifest**; a compact render buffer is ≈ **1.6 MB at 100k**. The cut is therefore a **delivery** mechanism; rendering (culling, LOD, picking, colouring) does not require it.
+
+When the visible set is **compacted** (slots `0…count-1`, `mesh.count = count ≤ B`), the mapping is maintained by the diff: `nodeToSlot` / `slotToNode`, with **swap-remove** on removal. Worked micro-example: `{A,B,C} → A↦0,B↦1,C↦2`; after `A` leaves and `D` enters: `C↦0,B↦1,D↦2` — *C moved slots without anyone deciding it*, so its matrix is copied and picking resolves slot 0 to C. Because transforms are **static**, matrices are written only on `appeared` and on the swap inside `removed`; colours are the only per-frame write. The mapping is **stable only under an unchanged cut** (the cut cache, Decision 26). The alternative — **identity mapping** (render all, slot = node index, hide via a per-instance visibility flag) — trades the churn for an **O(N) buffer** and drawing everything.
+
+## 111. Tilesets, traversal, draw calls, and the control configuration
+
+Clarified **tile versus tileset** for a library cut: to obtain the visible semantic nodes, use **per-node *tile*, inside *one* tileset** — **not** per-node *tilesets* (which multiply traversals, add N roots, and destroy hierarchy pruning). The library's traversal is **pruned** (frustum + screen-space error + `skipLevelOfDetail`), not "every tile," but a per-node tileset is **~40–60 MB at 100k**, **O(N)** client memory, and roughly **one draw call per visible tile** (batching lost). **Draw calls are issued by the library, not the developer**: the developer triggers a frame and controls scene membership, selection parameters, and content authoring; the per-tile draws are the library's. The **scaleable** structure is therefore **coarse group tiles + `i3dm` batches + own per-instance check** (§72's B). The **control configuration** was confirmed: **own the cut, write an instanced buffer, let the renderer issue one instanced draw** — the library is a **renderer, not a culler** (disable its own `frustumCulled`, preallocate `max = B`, set `mesh.count`). Recorded: **the manifest and a tileset are two encodings of one hierarchy**; a tileset is a **derived** artifact that must coexist with the manifest for value semantics — **two sources of truth**, roughly double the client metadata, and a lossy **two-box → one-box** mapping; the own-cut route needs **the manifest alone**.
+
+## 112. Client memory as the surviving justification
+
+If the goal is **minimal client memory**, the answer is the **lazy manifest** — ship descriptors only for the current cut — turning the dominant **~40 MB** metadata into **≈ 120–200 KB** at `B = 5,000` (O(B) rather than O(N)), with total client footprint ≈ 200 KB – 1 MB. But it **forces server-side selection**: the client cannot cut what it does not hold — §54's finding that **bounded client memory is a physical constraint and a better justification axis than exactness**. The **trilemma** (§54): O(B) memory + purely client-side selection + no extra round trips — **pick two**. Other levers, in order: own cut + renderer-only (avoid the O(N) tileset tree); compaction; **server-computed attention** (no per-node severity metadata client-side); compact binary encoding; progressive drill-down; remote/pixel streaming (the extreme). **Verdict:** the memory bound is the engine's **strongest justification** — physical, citable, non-performance — but it justifies **server-side selection**, not the cut uniquely (direct select and drill-down meet it too); it requires an **anchored device class**, an **O(N) baseline that genuinely exceeds** the bound, and the **lazy manifest (A′)** (without which the server cut gives no memory advantage); and in the PRD's **own scenario — a GPU laptop browser — it does not bind**. So it makes the engine **defensible in a thin-client, free-camera, hard-bound niche**, not necessary.
+
+## 113. The shared value: "if it does not bind, is it worth it?"
+
+The student observed that the supervisor and the agent share the value that **a mechanism that does not bind is not worth it**. Refined: the value is not *binding* but **causality / falsifiability under the studied conditions** — the **ablation test**. A mechanism's claimed benefit must be **caused** by it, **observable** at the operating point, and the study must **include** that point; otherwise the claim is vacuous. Where the crude form is wrong: **tail value** (caps, rate limits, safety bounds are valuable *precisely when they do not fire*), **structural value** (correctness, consistency, privacy constrain rather than bind), and **latent value**. Its **dark twin**: requiring the bound to bind tempts the **tuning trap** (choosing the regime so it binds), so the value must be paired with the **anchored-operating-point** rule (§13). **Constructive rule recorded:** *name the operating point where the mechanism is load-bearing, anchor it externally, and study it there; if no such point can be named honestly, the mechanism is decoration.*
+
+## 114. Performance, must-have, and the product arena
+
+**Performance improvement is unnecessary unless needed** — optimise against an **anchored requirement at a stated operating point**, measure first; an unneeded optimisation adds complexity and can **mask the real problem** (the engine's problem was an ungrounded premise, not speed). Corrections recorded: "needed" includes the **tail** and the **metered costs** (cloud egress, energy); and **improvement ≠ study** (a design-space characterisation is a contribution with no improvement at all — and COMP4299 requires evaluation, not improvement). Need is **regime-relative** ("unnecessary *at point P*," never in the abstract); and the right response to a requirement is sometimes to **avoid** it rather than optimise. On **nice-to-haves**: a nice-to-have is a *preference with no owner and no measure* and fails the anchor/measure/baseline tests, so it **cannot justify a project** — but the must/nice boundary is set by the **anchor**, not the property (60 FPS is a must in VR, a nicety in a dashboard), and **even a self-set "must"** (K3/K6) does *not* save a project if it is unsourced and met trivially. A nice-to-have **can justify a product — by demand**: markets rank among options that already meet the musts, and differentiation lives in the nice-to-haves, converted to justification by an **owner** and a **measure** (revealed preference). Recorded distinctions: **feature versus quality**; and the **arena** distinction — **product** justified by demand, **FYP** by problem + method + contribution + evaluation, **research** by a gap. Noted: the **GitHub hunt was the product-style demand test run inside a project** — it found demand for **aggregation**, none for the **coupling**. The rule did not change; the **currency** did.
+
+## 115. State and gates
+
+- **Track:** **decided — system-development** (COMP4299). Gate closed.
+- **Candidate:** **unresolved.** The drift topic is no longer the leading default (the student explored beyond it).
+- **The engine:** **not revived.** The competitor hunt supplies the **demand test** the review had lacked, and its verdict is **negative for the coupling** and **positive for plain aggregation**. The analysis remains the asset: the coupling, the commodity audit, the failing-baseline method, the related-work anchors, the design-space comparison, the cut taxonomy, and the memory justification.
+- **Stakeholder:** declared **none**; the **external anchor** must carry the justification.
+- **Open gates:** choose a candidate and anchor (an aggregation service; the drift topic; a standards/dataset project; an extended supervisor topic); **talk to the supervisor** (his bar; whether he accepts student-proposed topics); run the four-part filter (problem + stakeholder + buildable solution + verification, + reachable and observable); **integrity** (anchored criteria; no tuned constants presented as findings); and a **module-fit check** if any AI/ML is involved (COMP4299 vs CSAI4299).
+- **What a new agent should do:** do not re-litigate the engine unless asked; ask which **candidate** and which **anchor** the student is on; help **name the anchor** and **draft the candidate paragraph** (*problem → anchor (how it substitutes for a user) → minimal solution → verification → ethics*).
+
+## 116. Bottom line after Part VIII
+
+- The session **closed the track gate** and applied two new instruments. The **feature-request hunt** produced the review's **first real demand evidence** — and it points at **aggregation**, not the **coupling**: the engine's residue is **unrequested**.
+- The **design-space comparison** and the **cut taxonomy** — placement × implementation, the shared-crate control, **direct select**, **view-independence**, the **delivery/rendering separation**, and **compaction** — make the trade-offs reportable to the supervisor.
+- **Client memory** emerged as the engine's **only surviving justification**: physical and citable, but **narrow** — it justifies **server-side selection** generally, binds only for a **thin-client, free-camera** consumer, requires the **lazy manifest**, and **does not bind in the PRD's own scenario**.
+- The student, the supervisor, and the agent **share one value**: a mechanism must be **causal at an anchored operating point**. Applied precisely, it separates a project from a demo; applied crudely, it kills good engineering and invites the **tuning trap**. A **nice-to-have** can justify a **product by demand**, but not a project without an owner and a measure.
+- **Status:** track fixed; **candidate and anchor open.**
+
+---
+
+# Part IX — Defensibility, disclosure, supervisor fit, and trust (ninth session)
+
+Part IX records the ninth session (2026-10-17 → 2026-10-19). It closes the loop on **defensibility** — what makes a topic admissible, and what "mature solutions" and "one citation" actually buy; works the **privacy/disclosure** direction to a concrete problem, requirements, and a key extension; reads and positions two recent papers (**SHIP**; **hierarchical edge-IoT security monitoring**); examines the **supervisor's profile and authorship**; assesses whether the **engine fits** the supervisor's applications and whether it has **résumé value**; and closes on **IoT telemetry upload and trust**. Section numbers continue from §116. Figures remain estimates unless cited.
+
+## 117. Orientation
+
+The session moved from "which topic?" to "what makes *any* topic defensible?" — and stress-tested the disclosure direction against the literature and the supervisor's actual work.
+
+## 118. The data-centre digital-twin proposal
+
+"View-dependent data-centre telemetry visualization" assessed: **as pitched, not defensible**, and the domain weakens rather than strengthens the premise. Reasons: (i) a server room is ~**1,200 servers** (§58), so the entry budget never binds; (ii) the real pains — hot spots, PUE, capacity, blast radius — are **severity- and correlation-driven, not view-driven**; (iii) DCIM runs on a **LAN with capable clients**, the edge regime where broadcast wins; (iv) crowded (Vertiv, Sunbird, Nlyte, Cadence/6SigmaDC, Grafana, NVIDIA Omniverse). "100k EPS ≠ 100k devices" (§59).
+
+## 119. Do data-centre twins use visualization?
+
+Yes — prominently; 3D visualization is close to the signature of a DC twin (Sunbird: "a virtual 3D replica"; Raritan: "a 3D, software-based model"; Cadence Reality; NVIDIA Omniverse DSX). **But visualization is the interface, not the twin**: the industry itself says a true twin "goes far beyond 3D visualization" (Modius) — the substance is the synchronized model plus simulation (CFD/thermal, capacity, what-if). Visualization is **table stakes**, not a seam; 3D earns its place for **airflow/CFD**, not for telemetry.
+
+## 120. Does an FYP rule out simple CRUD?
+
+No — it rules out **simple**, not **CRUD**. The test: **delete the framework, the ORM, and the UI kit — is there a paper left?** A project passes on **problem + mechanism + evaluation** (plus substantial software and "integrate *and extend*"), not on the technology label. The failing pattern is assembly — the supervisor's six topics are one template: `sensor → threshold → dashboard → notify`.
+
+## 121. Mature solutions and defensibility
+
+Prior art does **not** disqualify (novelty is not required for COMP4299); it is the **baseline**. Four shapes: (a) build-where-exists → **assembly**; (b) build-for-a-context-the-incumbents-fail → defensible; (c) **study/evaluate** → defensible; (d) integrate-X+Y-where-the-composition-fails → defensible (the failing-baseline method). The fatal case is only (a). In a mature area the realistic routes are a **wanted residual** (needs access), a **study**, or an **engineering fit** judged on execution.
+
+## 122. The salon booking example
+
+A local hair salon wanting a booking system clears the gate the engine never did — a **real, reachable stakeholder** (and reopens the access constraint). But as pitched it is **assembly**: booking is commodity (Fresha, Booksy, Square, Vagaro, Google Reserve). The problem–solution mismatch: booking does **not** eliminate waiting; the real pains are **no-shows, service-time variability, walk-in mix, and skill assignment**. Reframes: no-show-aware overbooking, variable-duration scheduling, hybrid queues — each a mechanism plus an evaluation against the incumbent/manual baseline.
+
+## 123. FYP versus product
+
+Two objective functions: the FYP is an **assessment** (judge = examiner; success = a defensible contribution); the product is **value capture** (judge = market; success = users/revenue). The FYP deliberately **excludes** distribution, support, maintenance, monetisation. They share **one rung**: **problem legitimacy** (someone has the pain, or a citation). The product needs the whole ladder — **existence → salience → willingness to pay → viability**. The FYP's stakeholder is an **epistemic device** (prove the problem is real, enable evaluation), not a customer. A nice-to-have can justify a **product by demand**, not a project without an owner and a measure.
+
+## 124. One citation and specificity
+
+A generic citation ("someone wants a view-dependent visualization") is **the wrong citation** — it validates the **commodity half** and would be satisfied by Google Maps/Cesium. The citation must match the **contribution's specificity**. Evidence ladder: a paper's "future work" (weak) < one user (weak–moderate) < a **published complaint/workaround** (strong) < a **standard/regulation** (strong). One strong citation is **necessary, not sufficient**: extension, evaluation, feasibility, and integrity are still owed.
+
+## 125. QR-code attendance
+
+Public repos already do IP restriction, geofencing, and short-lived codes — commodity heuristics. A QR code is a **data carrier, not a presence proof** (trivially shared), so the design **resolves away its own hard part** (proxy attendance), exactly as §66 found for RFID. Residual seams: **relay/"mafia-fraud" resistance** (distance bounding, UWB, acoustic — mostly hardware), **privacy-preserving presence** (anonymous credentials / ZK: Semaphore, BBS+, eIDAS 2.0), a **rigorous comparative evaluation**, **collusion detection**, and **offline integrity**. The failing-baseline method applies: build the naive QR system, red-team it, build the reconciliation, evaluate (proxy rate, false accept/reject, usability, privacy).
+
+## 126. Justifying privacy without demand
+
+"Students want privacy" is weak as **demand** and probably false for the median student (privacy paradox; attendance is mandatory). Privacy survives on a different anchor: **regulation** (GDPR data minimisation/proportionality), **harm** (visa students, disabled or mentally-ill students, the stalked, marginalised groups), and **design obligation**. The "wanter" is the regulator/DPO, not the student — a mandated requirement without an eager user. The design tension to resolve: **verifiable accountability without central surveillance**.
+
+## 127. The disclosure problem
+
+Concrete problem: a campus operator shares a **live, aggregate view** of a building twin with an **external FM contractor** (one building; no other tenants; no identifiable individuals). Fourteen requirements across **access/scope, disclosure, delivery/correctness, accountability**, evaluated against the **engine** and the **best-of-breed composition**:
+
+- The engine **supplies** aggregation, exactness plus a consistent snapshot, freshness, and bounded delivery — the **delivery half**.
+- It **lacks** policy, suppression, temporal control, audit, revocation, and reconstruction evaluation.
+- It **conflicts** where exactness/consistency **enables subtraction**, where **delta encoding hands over the differencing signal**, and where camera-driven selection conflicts with a fixed policy scope.
+- The composition supplies policy/audit/static SDC but is **weak on live consistency, freshness, and bounds**.
+- **Both fail** on live suppression, temporal privacy, and a reconstruction adversary — the seam.
+
+## 128. Visualization not needed
+
+The disclosure problem is a **delivery** problem; rendering is orthogonal. Dropping the 3D client removes the camera loop, the per-viewer cut, the roaming problem, and a large build cost; the scope becomes a **policy-defined subtree**. Keep at most a minimal demo (dashboard/table) and an **operator-side audit view** (which supports accountability and the evaluation). State the project as **disclosure-bounded delivery**, not visualization.
+
+## 129. The key extension
+
+**Online statistical disclosure control over a live hierarchical model, coupled to per-consumer bounded delivery, verified by a reconstruction adversary.** Components: **E1** live hierarchical disclosure control (minimum group size + **complementary suppression** across levels; the reduction-type nuance — `min`/`max` leak a unit); **E2** temporal control (differencing, the timing channel, a release budget); **E3** suppression stability (transitions leak; hysteresis); **E4** absence confidentiality; **E5** the reconstruction-adversary harness; **E6** the coupling (shared aggregation, per-consumer disclosure, bounded delivery). Why it is an extension, not assembly: the composition **fails** the requirement (exact aggregates leak), and the reconciliation is the engineering.
+
+## 130. Existing solutions
+
+Yes, in parts: **data clean rooms** (AWS Clean Rooms minimum aggregation, BigQuery aggregation thresholds) do scope + aggregate-only + minimum group size, commercially, **query-based**; **SDC** (sdcTable, tau-ARGUS, complementary suppression) is **static** and known-vulnerable (Cox 2010); **DP under continual observation** (Dwork 2010; Jain 2023; SPAS `w`-event; ToPS) is **noisy**; **hierarchical DP** (Fioretto/Census) is noisy. The **combination** — live, hierarchical, suppression-based, bounded per consumer — is **not productized**, but the space is **well studied**: research-shaped, modest novelty. The "live" crux: if periodic suffices, a clean room plus a scheduler is close to the solution.
+
+## 131. Live versus periodic
+
+In **rate**, live ≈ periodic with Δ → 0; but **event-driven** adds a **timing channel** that periodic does not. The real problem is **repetition over a horizon** (≈ T/Δ releases), because differencing accumulates — and static per-release SDC is known unsafe under repetition. So drop "live" as the framing: it is **online/repeated release**, and the controlling variables are **freshness Δ, horizon T, and whether timing is published**.
+
+## 132. Why it is important
+
+Three legs: the setting is real and growing (data sharing, clean rooms, data spaces); the obligation is real and citable (GDPR plus sectoral confidentiality); and the **current practice is unsafe and the safe alternative missing** — the **silent failure** of repeated thresholded release. The strongest leg is the third. Honest counterpoints: demand may be weak or unspoken; mature fields may be "good enough"; the scenario may be contrived; the problem can be avoided. Importance is **conditional** on a documented deployment or standard.
+
+## 133. How to address, why nobody, how to prove
+
+Two coherent routes: **DP under continual release** (formal, noisy) versus **suppression-based online SDC** (exactness, no general proof). "Why nobody does it" — the §63 prior: most likely **exactness is the idiosyncratic requirement** (drop it and DP solves it), or demand is weak, or it is designed away. **Proving no leak**: DP is the only general proof (composition handles repetition); complementary-suppression correctness proves **single-release** bounds, not sequences; otherwise you get **measured** resistance. The honest claim: **exactness where released + no single-release reconstruction (proved) + measured sequence resistance (evaluated)** — not a universal no-leak proof.
+
+## 134. SHIP (arXiv 2610.21048)
+
+**SHIP: Structured and Hierarchical Insight with Privacy** (UVA + Google Research; cs.CL; 15 Oct 2026): DP insight extraction from **textual corpora**; a **hierarchical hybrid taxonomy** (open-set DP partition selection + closed-set supplementation) and a **DP synthetic table** (AIM) preserving cross-attribute marginals; a **zCDP + composition** guarantee. Relevance: a **related-work anchor**, not a competitor — hierarchical DP release is established, and DP-with-composition is the **proof** answer. It is **textual, one-shot, and noisy**: it does not address repeated release, per-consumer delivery, or exactness. Applying it = joining the DP route (and conceding exactness).
+
+## 135. The supervisor's profile and authorship
+
+**Su-Kit Tang**, Associate Professor, Faculty of Applied Sciences, **Macao Polytechnic University**. Five recent lines: **embedded/edge AI** (review; zero-copy instrumentation); **lightweight vision for conservation** (eBirdNet-Nano); **LLM + built environment** (floor-plan analysis/compliance); **air quality** (feature screening); **auditability/privacy** (auditable blockchain confidentiality). Authorship check (Crossref): he is **never first author**; **last/senior** on the edge-AI/floor-plan/embedded-AI papers (his students lead); **middle** on the air-quality, blockchain, employment, and sentiment collaborations. Implication: the last-author lines are where he **supervises students** with data/hardware — the best bets; the middle-author collaborations are less clearly his.
+
+## 136. Fitting the engine to those applications
+
+The engine's **parts** can appear (hierarchy, aggregation, filtering), but the **engine as contribution** does not fit: the bird monitor's hard part is detection; the floor-plan's is extraction/rules; the embedded benchmark has no hierarchy; air quality's is calibration. In every case the **distinguishing mechanism — live, bounded, per-consumer, view-dependent — does not bind**. Diagnosis: "hierarchy + aggregation + filtering" is **infrastructure** — ubiquitous as a component, never a product alone. The search direction is inverted: not "where does my solution fit?" but **"whose requirement fails the existing tools?"**
+
+## 137. Résumé value and engineering depth
+
+The engine has **portfolio value** — high for systems/backend/infrastructure/real-time roles — **conditional on building and measuring** (docs-only is weak). Present **engineering metrics**, not users; frame it as an exploration. **"Engineering depth" ≠ from scratch**: refusing libraries is a yellow flag (NIH); depth = justified dependencies + understanding + measured trade-offs + correctness discipline. Reuse transport/math/rendering; build the **state table, aggregation, cut, delta protocol, oracle, harness**.
+
+## 138. The edge-IoT security-monitoring paper (arXiv 2610.09817)
+
+**Hierarchical Security Monitoring for Edge-IoT: A Formal Methods Approach** (IEEE CSR 2026; Cyprus/Greece): two-level runtime verification — **L1 TeSSLa** per-device predicates (size, fuzz, monotonic time, rate) aggregated to **four-valued verdicts** (⊤/⊤p/⊥p/⊥); **L2 MonPoly MFOTL** at the gateway correlating per-device verdicts (three nodes with ⊥p within 60 s) to catch **coordinated APT**; a lattice-meet composition with **witness sets**; a shield (block/confirm/log/allow); uplink **one Boolean per window per node**. Evaluated on a Docker testbed: L1 catches single-node classes; APT 12/16 → 14/16 with L2; FPR 24% (timestamp artifact) → 4% on a cleaner replay; ~0.52 µs/event, ~1 µs/verdict; ~200 bit/s uplink at N = 1000. Limits: synthetic, offline, single gateway, **non-adaptive adversary**. **Lesson: start from the cost asymmetry (edge vs cloud vs attention), then derive the hierarchy** — the inversion the engine never made.
+
+## 139. IoT telemetry: upload and trust
+
+**Upload**: link (Wi-Fi/Ethernet/cellular/LPWAN/BLE/Zigbee/Modbus/CAN/satellite); protocol (MQTT via broker; HTTP(S); CoAP; AMQP; OPC UA; Modbus/DNP3/IEC 61850; Sparkplug B; LoRaWAN; WebSocket); patterns (gateway-mediated, store-and-forward, periodic/delta/event, JSON/CBOR/Protobuf); **time** (device vs gateway-observed vs server). **Trust** is six separable questions: authenticity (mTLS/certs/PSK), integrity (TLS/MAC/signature), freshness (nonce/sequence/timestamp), device integrity (secure boot, **remote attestation**), **data truth** (range/rate/plausibility/redundancy/calibration), and **behaviour** (rate/size/time predicates, cross-device correlation). **Cryptography gives authenticity and integrity, not truth**; a compromised sensor signs a wrong value perfectly. Governance adds provisioning, revocation, access control, and **audit/provenance**. This maps onto the papers: the edge-IoT paper is the **behavioural** layer (and assumes identity/attestation); the drift topic is the **data-truth** layer; the disclosure topic is the **governance/audit** layer.
+
+## 140. State and gates
+
+- **Track:** system-development (COMP4299) — **decided**.
+- **Candidate:** **open**, but the landscape has contracted. The engine is **not revived**; its parts are reusable and its analysis is the transferable asset.
+- **Access:** no stakeholder declared; **the supervisor's lab is the realistic source** (data/hardware), and the **last-author lines** are the strongest bets.
+- **The disclosure direction:** the most intellectually coherent, but **research-shaped** and dependent on the exactness/DP decision and the "repetition over a horizon" framing.
+- **Gates:** (1) choose the candidate/anchor; (2) confirm **COMP4299 vs CSAI4299**; (3) establish **data/hardware availability** with the supervisor; (4) decide the **exactness vs DP** route if the disclosure direction is taken; (5) integrity (no tuned constants; derivable decisions).
+- **Supervisor questions:** which line has data/hardware this term; does he accept a student-proposed topic; which module; what bar.
+
+## 141. Bottom line after Part IX
+
+- The session produced the review's **most complete account of defensibility**: prior art is the **baseline**, not a disqualifier; the fatal shape is only "build the solved thing again, for nobody, measured by nothing"; a **study** or a **failing-baseline extension** is the honest escape.
+- The **disclosure** direction reached a concrete problem, requirements, and a **key extension** (online hierarchical SDC + a reconstruction adversary) — but the literature shows it is **well studied**, the "live" framing collapses to **repetition over a horizon**, and the **exactness** constraint is the idiosyncratic bet.
+- The **supervisor's profile** is the strongest practical asset: his **last-author** lines (edge AI, bird monitoring, floor plans) provide data, hardware, and supervision; the middle-author collaborations are weaker bets.
+- The **engine** retains value as a **portfolio** piece (conditional on building/measuring) and as **analysis** (coupling, design space, commodity audit) — not as the FYP contribution.
+- **Status:** track fixed; candidate, anchor, and module fit open; the next move is a **supervisor conversation** with 2–3 one-paragraph candidates and two questions (data/hardware; COMP4299 vs CSAI4299).
