@@ -229,44 +229,39 @@ Figures in §4–§5 are derived or assumed at S0; none are measured.
 
 The delivered set is determined by the camera, the consumer, or nobody; placement decides where that selection runs. Rendering selection — what to draw — is always the client's and always present; this section concerns delivery selection — what is sent.
 
-| Model + placement | Delivered set | Membership | Supported transports | Server CPU (unmeasured) | Client memory | Latency | Bound | Verdict / role |
+| Model + placement | Delivered set | Membership | Supported transports | Dominant per-viewer server work (unmeasured) | Client memory | Added selection-path latency | Bound | Verdict / role |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Geometric + client (broadcast source) | all state; client computes the frontier | static (delivery); dynamic (render) | full-state snapshot; full-state batched delta | fanout only | O(N) | local | none | client cut; no egress bound |
-| Geometric + client (subscription) | frontier (client-selected) | dynamic | frontier snapshot; frontier batched delta; subscription | routing | O(N) manifest + O(B) frontier | subscription round trip | soft (α) | D2f; ties D3 on egress; CPU advantage expected but unmeasured |
-| Geometric + server | frontier | dynamic | frontier snapshot; frontier batched delta | cut+encode; model 0.014–0.034 core/viewer at 60 Hz (unmeasured) | O(B) with lazy manifest; O(N) otherwise | camera path | hard | only under a hard bound or thin client |
-| Explicit + client | subscribed subtree | dynamic on subscription | subtree snapshot; subtree batched delta; subscription | routing | O(subtree) | local | soft | inspection |
-| Explicit + server | subscribed subtree | dynamic on subscription | subtree snapshot; subtree batched delta; subscription | routing | O(subset) | round trip | soft | D6; drill-down |
-| None (broadcast) | all state | static | full-state snapshot; full-state batched delta; single broadcast topic | fanout only | O(N) | local / network | none | baseline at S0; wins S1 |
+| Geometric + client (broadcast) | all state; client computes the frontier | static (delivery); dynamic (render) | full-state snapshot; full-state batched delta | fanout only | O(N) | none; selection client-local, delivery broadcast | none | client cut; no egress bound |
+| Geometric + client (subscription) | frontier (client-selected) | dynamic | frontier snapshot; frontier batched delta; subscription | routing | O(N) manifest + O(B) frontier | subscription RTT per frontier change | soft (α) | D2f; ties D3 on egress; CPU advantage expected but unmeasured |
+| Geometric + server | frontier | dynamic | frontier snapshot; frontier batched delta | cut+encode; model 0.014–0.034 core/viewer at 60 Hz (unmeasured) | O(B) with lazy manifest; O(N) otherwise | camera uplink + cut + downlink | hard | only under a hard bound or thin client |
+| Explicit + client | subscribed subtree | dynamic on subscription | subtree snapshot; subtree batched delta; subscription | routing | O(N) manifest + O(subtree) data; O(subtree) with scope-limited lazy manifest | subscription RTT on user action; aggregation local | soft | inspection |
+| Explicit + server | subscribed subtree | dynamic on subscription | subtree snapshot; subtree batched delta; subscription | routing | O(N) manifest + O(subtree) data; O(subtree) with scope-limited lazy manifest | subscription RTT + server aggregation | soft | D6; drill-down |
+| None (broadcast) | all state | static | full-state snapshot; full-state batched delta; single broadcast topic | fanout only | O(N) | none; delivery broadcast | none | baseline at S0; wins S1 |
 
-**Reading the table.** The model and placement are orthogonal: geometric can run on the client or server; explicit is a subscription, not a cut; none has no placement decision. The table therefore lists coherent combinations, not alternatives among model, placement, and transport. Server CPU is qualitative and unmeasured: fanout/routing for client/explicit, cut+encode for server. The server-cut range is a model hypothesis, not a measurement.
-
-**Transport compatibility.** Transport is a separate dimension (§4.6). This column lists compatible transports, not a ranking; per-value delta is excluded throughout. Actual egress at S0 is in §5.3, where the set size and transport are stated.
+**Reading the table.** The model and placement are orthogonal: geometric can run on the client or server; explicit is a subscription, not a cut; none has no placement decision. The table therefore lists coherent combinations, not alternatives among model, placement, and transport. The server-work labels are qualitative; that column is defined below.
 
 **Model notes.**
-- Geometric buys relevance without asking and LOD/blending; server-side it costs the camera loop and per-viewer CPU, and it needs hysteresis and oracle parity either way.
+- Geometric buys relevance without asking and LOD/blending; it needs hysteresis and oracle parity whether it runs on the client or server.
 - Explicit is simple, deterministic, and works off-screen; it caps at the root and has no free-camera relevance.
 - None is simplest and client-verifiable; its egress is unbounded.
-- **Geometric + client (broadcast source) and None have the same delivered set.** The difference is that the client performs a geometric cut for rendering; neither reduces egress.
-- Only geometric and explicit define a per-consumer set that can be used as a subscription. None degenerates to a single broadcast topic.
 
-**Membership and transport.** Membership belongs to the delivered set, not to the model alone. None and geometric + client broadcast are static for delivery (the rendered frontier is dynamic). Geometric + client (subscription, D2f), geometric + server, and explicit are dynamic. A static set can use a flat array; a dynamic set needs identity or a slot table, `appeared`/`removed`, and keyframes. This is why transport remains a separate dimension in §4.6: it composes with every row.
+**Geometric + client (broadcast) and None deliver the same set.** Only the client's rendering cut differs; neither reduces egress.
 
-**Client placement has two delivery variants.** The broadcast-source row sends all state. The D2f row has the client compute the frontier and subscribe to it, so the delivered set is the frontier with a soft bound; the client still holds the manifest unless a lazy structure is used. Both are client placement; the difference is delivery, not selection.
+**What the server-work column measures.** The **Dominant per-viewer server work** column is per-viewer marginal work, in cores/viewer, excluding shared state update, aggregation, and serialization; aggregation is discussed in §4.5 and the S0 comparison is in §5.3. Formally, `C_server(V) = C_shared + V × C_per_viewer`; the column is `C_per_viewer`, not `C_server(V)/V`. *Fanout only* includes per-socket framing and encryption; *routing* includes per-subscriber encoding but no geometric selection; *cut+encode* includes per-viewer selection and encoding. Per-viewer repair and late-join snapshots are excluded. Only cut+encode has a model range, and it is unmeasured.
+
+**Client memory includes the manifest.** Without a lazy or scope-limited manifest, every row is O(N); the O(B)/O(subtree) entries assume one. The manifest strategy is §4.8.
+
+**Added selection-path latency, not end-to-end latency.** The column records the latency added by the selection path to the baseline delivery. At S0 the 1 Hz egress cadence dominates p99; the selection path is a second-order term. The values are qualitative and unmeasured.
+
+**Membership and transport.** Membership belongs to the delivered set, not the model. None and geometric + client broadcast are static for delivery (the rendered frontier is dynamic); D2f, geometric + server, and explicit are dynamic. A static set can use a flat array; a dynamic set needs identity or a slot table, `appeared`/`removed`, and keyframes. Only geometric and explicit define a per-consumer set usable as a subscription; None degenerates to a single broadcast topic. Transport is separate (§4.6) and composes with every row: the Supported transports column lists compatibility, not a ranking, per-value delta is excluded, and S0 egress is in §5.3.
 
 ### 4.2 Selection placement: conditional effects
 
-The placement columns are part of the combined table in §4.1. The conditional effect depends on what the client's selection is connected to: client placement over a broadcast source cannot reduce egress, while client placement with a subscription can; server placement can hard-bound egress but pays per-viewer CPU. A server-coarse/client-fine split is a hybrid variant, not a separate placement; it is not evaluated here.
+Client placement over a broadcast source cannot reduce egress: culling happens after the bytes leave the server. Client placement with a subscription (D2f) can reduce egress, because the client's selected frontier becomes the subscription, but the bound is soft: the server does not control the selected set. Geometric + server produces a hard bound with server-authoritative relevance, at the cost of per-viewer CPU and the camera loop it alone needs. A server-coarse/client-fine split is a hybrid variant, not a separate placement; it is not evaluated here.
 
-- **Client placement over a broadcast source** does all selection locally; it cannot reduce egress, because culling happens after the bytes leave the server. **Client placement with a subscription (D2f)** can reduce egress, because the client's selected frontier becomes the subscription; its bound is soft because the server does not control the selected set.
-- **Server placement** produces a hard bound, with server-authoritative relevance, but pays per-viewer CPU and the camera path.
+The client's per-frame cull follows the delivered set: O(B) for geometric + server, O(N) for geometric + client and none, O(subtree) for explicit. The placement choice changes the ranking only jointly with deployment, the client-memory bound, and the consumer profile; at S0 no mechanism binds hard, so neither placement is forced by load.
 
-**Two criteria from the separate tables are now implicit.** A camera loop exists only when geometric selection runs server-side — geometric + server; client placement does not need one, and explicit/none never do. Client cull per frame follows the delivered set: O(B) for geometric + server, O(N) for geometric + client and none, O(subtree) for explicit.
-
-The placement choice changes the ranking only jointly with deployment, the client-memory bound, and the consumer profile. At S0 no mechanism binds hard, so neither placement is forced by load.
-
-**Rendering selection is always present.** Whatever the delivery model, the client frustum-culls and levels the scene for drawing, using library math or its own code (§4.3, §4.4). The models differ only in whether the client holds the data to perform it: under geometric delivery the server performs the selection and sends the resulting set, so the client draws it directly; under explicit delivery the client receives the named subtree and culls it locally; under broadcast it culls the whole state locally. The choice is therefore not whether selection happens, but whether it is duplicated on the server, and which side pays — the trade recorded above as server CPU against client memory and client CPU.
-
-The data and aggregation are view-independent; only the selection is view-dependent, and whether its delivery is geometric depends on the bound rather than on the visualization.
+Rendering selection is always present (§4.1). The models differ only in whether the client holds the data to perform it, so the trade is server CPU against client memory and client CPU. Data and aggregation are view-independent; only selection is view-dependent.
 
 ### 4.3 Selection implementation
 
@@ -328,6 +323,8 @@ The encoding alternatives are the rows of the matrix in §4.6. Flat fixed-set ha
 
 The lazy manifest is the mechanism by which server-side selection produces a client-memory advantage. Without it, the client is O(N) regardless of where the cut runs. At B = 2,000 the descriptors are ~0.05–0.1 MB; total footprint is ~0.1–0.4 MB.
 
+**What O(B) requires.** A compacted B-slot buffer, not an N-slot identity buffer, and a sparse `node ↔ slot` map over the B entries (a slot table, hash map, or sorted array), not a dense array over N. Slot reuse requires a dynamic mapping, updated on membership change; a removal frees a slot and an appearance takes one (swap-remove may also move the last entry). The cost is client CPU O(changes) (worst case O(B)) and protocol events, not memory. Without compaction, the client is O(N) and the O(B) claim fails.
+
 ## 5. Coherent packages
 
 ### 5.1 Feasibility constraints
@@ -368,9 +365,9 @@ Assumptions: f32 values, m = 3, c = 3, G = 180, p = 0.5 assumed, 1 Hz egress. Se
 | D3 | frontier (B = 2,000); 13 KB/s | 0.0042 | cut+encode; model 0.014–0.034 core/viewer at 60 Hz | ~0.1–0.3 | ~4 MB | ~1,020–1,100 | Hard | Yes | ~70 |
 | D4 | frontier (B = 2,000); 13 KB/s | 0.0042 | cut+encode; model 0.014–0.034 core/viewer at 60 Hz | ~0.1–0.3 | ~0.05–0.1 MB descriptors; ~0.1–0.4 MB total | ~1,050–1,200 | Hard | Yes | ~85 |
 | D5 | site-wide; 65 KB/s divided by k | 0.021 divided by k | fanout only | ~0.5–2 | ~4 MB | ~1,030–1,100 | None | Yes | ~20 |
-| D6 | room (~625 devices); 4 KB/s | 0.0013 | routing | ~0.1–0.5 | ~subset (~0.1–0.2 MB) | ~1,020–1,080 | Soft | Yes | ~10 |
+| D6 | room (~625 devices); 4 KB/s | 0.0013 | routing | ~0.1–0.5 | ~4 MB + subtree (~0.1–0.2 MB); ~subtree with lazy manifest | ~1,020–1,080 | Soft | Yes | ~10 |
 
-**Labels for the new columns.** Server CPU is **unmeasured**; the server-cut range is a model hypothesis, not a result. Client CPU and p99 latency are also assumed order-of-magnitude ranges, not measurements; they complete the §2.2 vector and are swept. At S0, latency is dominated by the 1 Hz egress cadence (Table 3.2), so the ranges overlap and do not change the ranking; the ~1 s p99 follows from the cadence, not from package latency. D6's lower figures reflect its narrower delivered set, not a free-camera capability.
+**Labels for the new columns.** Server CPU is **unmeasured**; the per-viewer basis is defined in §4.1, and the cut+encode range is a model hypothesis, not a result. Client CPU and p99 latency are also assumed order-of-magnitude ranges, not measurements; they complete the §2.2 vector and are swept. At S0, latency is dominated by the 1 Hz egress cadence (Table 3.2), so the ranges overlap and do not change the ranking; the ~1 s p99 follows from the cadence, not from package latency. D6's lower figures reflect its narrower delivered set, not a free-camera capability.
 
 **D2c's build cost.** D2c avoids the shared cut crate (no WASM frontier cut), so its marginal build is ~15 h rather than D2f's ~20 h; that is its surviving trade against D2f.
 
