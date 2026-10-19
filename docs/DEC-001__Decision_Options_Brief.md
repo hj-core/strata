@@ -221,7 +221,7 @@ The dimensions follow the delivery pipeline:
 | Delivery | How are the selected entries framed and encoded? | §4.6 transport and encoding (§4.7 notes) |
 | Retention | What does the client hold? | §4.8 memory strategy |
 
-Dimensions in **different** layers are orthogonal: any selection model can be paired with any transport and any encoding. Within a dimension, the columns are alternatives; dimensions may also be orthogonal within a layer. §4.1 compares the selection model and its placement together; §4.6 compares transport and encoding together. The layering is why selection and delivery remain separate: one chooses the set, the other frames its bytes.
+Dimensions in **different** layers are orthogonal: any selection model can be paired with any transport and any encoding. Within a dimension, the rows are alternatives; dimensions may also be orthogonal within a layer. §4.1 compares the selection model and its placement together; §4.6 compares transport and encoding together. The layering is why selection and delivery remain separate: one chooses the set, the other frames its bytes.
 
 Figures in §4–§5 are derived or assumed at S0; none are measured.
 
@@ -270,26 +270,21 @@ The data and aggregation are view-independent; only the selection is view-depend
 
 ### 4.3 Selection implementation
 
-| Criterion | Library-owned | Library plus own policy | Own shared crate |
-| --- | --- | --- | --- |
-| Build cost | Lowest | Medium | Higher |
-| Semantics control | Screen-space error only; no B, no Δ, no blended entries, no oracle parity | Fragile; the library has already pruned | Full control; oracle parity |
-| Confounds a placement comparison | Yes | Yes | No |
-| Changes the ranking? | No | No | No |
-| Verdict | Not acceptable for a controlled comparison | Not recommended | Control configuration |
+| Option | Build cost | Semantics control | Confounds a placement comparison | Changes the ranking? | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| Library-owned | Lowest | Screen-space error only; no B, no Δ, no blended entries, no oracle parity | Yes | No | Not acceptable for a controlled comparison |
+| Library plus own policy | Medium | Fragile; the library has already pruned | Yes | No | Not recommended |
+| Own shared crate | Higher | Full control; oracle parity | No | No | Control configuration |
 
 This dimension affects build cost and comparability, not the ranking. It cannot create an advantage. It applies to both selections: for the client's rendering selection, "library" means the library's cull and LOD math (for example three.js `Frustum`, Cesium `CullingVolume`) and "own" means hand-written traversal, with the same trade-offs, though no oracle is required because nothing leaves the client.
 
 ### 4.4 Substrate
 
-| Criterion | Manifest only | Tileset | Regular cells plus own check |
-| --- | --- | --- | --- |
-| Artifacts | One | Tileset plus content plus manifest; two sources of truth | Manifest plus cells |
-| Client memory at 10k | ~4 MB, or O(B) with lazy loading | O(N) tree plus metadata | O(B) |
-| Semantic control | Full | Library-defined; loses B and blended entries | Full |
-| Build cost | Medium | Medium | Medium |
-| Changes the ranking? | No | No | No |
-| Verdict | Preferred | Cross-check only | Acceptable alternative |
+| Option | Artifacts | Client memory at 10k | Semantic control | Build cost | Changes the ranking? | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| Manifest only | One | ~4 MB, or O(B) with lazy loading | Full | Medium | No | Preferred |
+| Tileset | Tileset plus content plus manifest; two sources of truth | O(N) tree plus metadata | Library-defined; loses B and blended entries | Medium | No | Cross-check only |
+| Regular cells plus own check | Manifest plus cells | O(B) | Full | Medium | No | Acceptable alternative |
 
 The manifest is the source of truth for values. A tileset is a derived artifact and introduces a second encoding of the same hierarchy.
 
@@ -297,27 +292,22 @@ The manifest is the source of truth for values. A tileset is a derived artifact 
 
 Selection and aggregation placement are coupled. Client-side aggregation requires the client to hold the subtree, which forces a broadcast or interest substrate and pushes device-level data onto the wire (§10, §109).
 
-| Criterion | Server | Client |
-| --- | --- | --- |
-| Server CPU | One shared pass, amortised | ~0 |
-| Client holds | Only the delivered slice | The whole subtree |
-| Egress consequence | Bounded by the slice | Requires broadcast or interest |
-| Aggregation of the unseen | Exact, server-side | Impossible without the unseen children |
-| Cross-viewer consistency | Shared snapshot | Lost unless separately coordinated |
-| Feasibility | Compatible with all selection models | Only with broadcast or coarse interest |
-| Verdict | Required if aggregation of the unseen is a requirement | Not independent of §4.1 |
+| Option | Server CPU | Client holds | Egress consequence | Aggregation of the unseen | Cross-viewer consistency | Feasibility | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Server | One shared pass, amortised | Only the delivered slice | Bounded by the slice | Exact, server-side | Shared snapshot | Compatible with all selection models | Required if aggregation of the unseen is a requirement |
+| Client | ~0 | The whole subtree | Requires broadcast or interest | Impossible without the unseen children | Lost unless separately coordinated | Only with broadcast or coarse interest | Not independent of §4.1 |
 
 The requirement itself is the open question. The coupling constrains the design space but does not establish a need.
 
 ### 4.6 Delivery: transport and encoding
 
-Transport and encoding are separate choices but are coupled through membership. The rows are transports; the columns are encodings.
+Transport and encoding are separate choices but are coupled through membership. The rows are encodings; the columns are transports.
 
-| Transport | Flat fixed-set | Self-describing record | Slot table + flat |
+| Encoding | Full snapshot | Batched delta | Per-value delta |
 | --- | --- | --- | --- |
-| Full snapshot | best for full state (~122 KB/s) | fallback | possible; ~26 KB/s for a frontier snapshot |
-| Batched delta | fixed set only (~65 KB/s full state) | workable | best for a dynamic frontier (~13 KB/s) |
-| Per-value delta | excluded (~52 B header per value) | excluded | excluded |
+| Flat fixed-set | best for full state (~122 KB/s) | fixed set only (~65 KB/s full state) | excluded (~52 B header per value) |
+| Self-describing record | fallback | workable | excluded (~52 B header per value) |
+| Slot table + flat | possible; ~26 KB/s for a frontier snapshot | best for a dynamic frontier (~13 KB/s) | excluded (~52 B header per value) |
 
 **Header overhead.** Batching is a requirement, not an optimisation: per-value messages carry approximately 52 B of IP overhead (WS 2 + TCP ~30 with options + IPv4 20; §11, §73). One full snapshot amortises the header to ~0.04% of the full state; a per-value delta inflates a 4 B value to ~14×. `p` is not free: `p ≈ min(1, r/egress) × noise_pass`, so at high r the delta approaches the snapshot.
 
@@ -327,17 +317,14 @@ Transport and encoding are separate choices but are coupled through membership. 
 
 ### 4.7 Encoding: alternatives and costs
 
-The encoding alternatives are the columns of the matrix in §4.6. Flat fixed-set has no identity cost and requires a fixed layout. Self-describing records pay 1–2 B of identity per sent entry and are best when few entries change or membership churns. Slot table plus flat pays identity only on membership change, is best when many entries change but membership is stable, and requires a keyframe on desync. For the frontier delta at S0, self-describing records cost ~15 KB/s and the slot table ~13 KB/s. Neither choice changes the ranking; it changes absolute bytes. Appendix B gives worked byte-level examples and the S0 costs.
+The encoding alternatives are the rows of the matrix in §4.6. Flat fixed-set has no identity cost and requires a fixed layout. Self-describing records pay 1–2 B of identity per sent entry and are best when few entries change or membership churns. Slot table plus flat pays identity only on membership change, is best when many entries change but membership is stable, and requires a keyframe on desync. For the frontier delta at S0, self-describing records cost ~15 KB/s and the slot table ~13 KB/s. Neither choice changes the ranking; it changes absolute bytes. Appendix B gives worked byte-level examples and the S0 costs.
 
 ### 4.8 Client-memory strategy
 
-| Criterion | Full manifest | Lazy manifest (A′) |
-| --- | --- | --- |
-| Client memory | O(N); ~4 MB at 10k, ~40 MB at 100k | O(B); ~0.05–0.1 MB at B = 2,000 (~120–200 KB at B = 5,000) |
-| Requires | Nothing | Server-side selection |
-| Build cost | Baseline | Additional ~15 h |
-| Binds at S0 | No; a laptop holds 4 MB | No; nothing to bound |
-| Verdict | Sufficient at S0 | Necessary only if server-side selection is claimed and a client bound exists |
+| Option | Client memory | Requires | Build cost | Binds at S0 | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| Full manifest | O(N); ~4 MB at 10k, ~40 MB at 100k | Nothing | Baseline | No; a laptop holds 4 MB | Sufficient at S0 |
+| Lazy manifest (A′) | O(B); ~0.05–0.1 MB at B = 2,000 (~120–200 KB at B = 5,000) | Server-side selection | Additional ~15 h | No; nothing to bound | Necessary only if server-side selection is claimed and a client bound exists |
 
 The lazy manifest is the mechanism by which server-side selection produces a client-memory advantage. Without it, the client is O(N) regardless of where the cut runs. At B = 2,000 the descriptors are ~0.05–0.1 MB; total footprint is ~0.1–0.4 MB.
 
@@ -538,13 +525,10 @@ The dynamic set is the per-viewer frontier. Membership is the set of node indice
 
 Two encodings are viable.
 
-| Criterion | Self-describing record | Slot table plus flat |
-| --- | --- | --- |
-| Identity cost | 1–2 B per sent entry | 1–2 B per membership change |
-| Per tick | Flags/mask plus changed values plus attention | Bitmap P/8 plus mask plus changed values |
-| S0 cost | ~15 KB/s | ~13 KB/s |
-| Best when | Few entries change, or membership churns | Many entries change, membership stable |
-| Limitation | Identity cost on every record | Slot-table desync requires a keyframe |
+| Option | Identity cost | Per tick | S0 cost | Best when | Limitation |
+| --- | --- | --- | --- | --- | --- |
+| Self-describing record | 1–2 B per sent entry | Flags/mask plus changed values plus attention | ~15 KB/s | Few entries change, or membership churns | Identity cost on every record |
+| Slot table plus flat | 1–2 B per membership change | Bitmap P/8 plus mask plus changed values | ~13 KB/s | Many entries change, membership stable | Slot-table desync requires a keyframe |
 
 **Record layout** (m = 3, f32):
 
