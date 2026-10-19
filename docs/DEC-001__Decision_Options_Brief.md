@@ -4,8 +4,8 @@
 | --- | --- |
 | Document ID | DEC-001 |
 | Title | Design comparison for bounded per-consumer delivery of live telemetry |
-| Version | 0.3.0 |
-| Status | Draft — for discussion |
+| Version | 0.4.0 |
+| Status | Draft — for supervisor discussion |
 | Last Updated | 2026-10-19 |
 | Related documents | DISCUSSION-SUMMARY (Parts I–IX, §1–§141), PRD-001, TDD-001, PLN-001 |
 
@@ -26,7 +26,7 @@ The document is written to be audited: every parameter has an external anchor or
 The comparison does not show an unconditional advantage.
 
 1. Under the base scenario (S0), no design dominates **on the quantified metrics among packages that meet the S0 consumer requirement**. Fine-grained interest delivery and the server-side cut tie on egress (~13 KB/s per client); broadcast is approximately 5× worse (the ratio of devices to entry budget, `N/B`); the server-side cut is expected to pay more server CPU at a 60 Hz selection rate, but the magnitude is unmeasured. At 10 Hz the model predicts a near-tie; the CPU comparison is unmeasured.
-2. The server-side cut uniquely provides a hard per-client bound among the S0 packages. That bound is requirement K3, set by the project rather than sourced externally.
+2. The server-side cut uniquely provides a hard per-client bound among the S0 packages. That bound is requirement K3, **adopted as a self-set requirement** (decision, 2026-10-19); it is declared, not sourced externally.
 3. The cut's advantage is conditional on a thin client (S2) or scattered, metered consumers (S4). No condition is **fully** anchored at present: S2 lacks a client class; S4's metering is anchored, but its scatter is not (candidate: fleet/maritime).
 4. No published demand was found for the conjunction of bounded, exact, consistent, per-consumer delivery under a live cut. Published demand exists for plain aggregation.
 5. The comparison therefore supports a conditional claim in a narrow niche, not a general advantage.
@@ -424,7 +424,7 @@ The engine's advantage is conditional, and **no condition is fully anchored**.
 
 - It never dominates on the quantified metrics. D2f ties it on egress in every variant and is expected to be cheaper on CPU at 60 Hz (model; unmeasured); at 10 Hz the model is a tie. D1 is cheaper to build and wins in S1.
 - It uniquely supplies a **hard per-client bound among the S0 packages**. Exact aggregation of the unseen and a shared cross-viewer snapshot accompany it but are not unique: D2f and D6 also aggregate server-side, and a broadcast snapshot is shared. None of the three is sourced externally: the bound is self-set (K3), and consistency and exactness are properties of a centralised design rather than demands (§39, §64).
-- The strongest surviving claim is therefore the hard bound, and it is a self-set product requirement rather than a sourced one.
+- The strongest surviving claim is therefore the hard bound. **K3 is adopted as a self-set requirement** (decision, 2026-10-19): it is declared, not sourced, and the comparison's conclusion is conditional on accepting it.
 - The demand test fails for the conjunction. Published demand exists for aggregation, not for bounded, exact, consistent, per-consumer delivery under a live cut.
 
 ## 6. What the comparison shows
@@ -471,7 +471,7 @@ A universal gap is evidence of absent demand more often than of unmet need. The 
 | Unknown | If resolved as | Consequence |
 | --- | --- | --- |
 | A thin-client class with a hard bound | An embedded HMI or kiosk with a small metadata budget | D4 wins S2 outright; the claim becomes anchored |
-| The hard bound is required | A sourced requirement rather than K3 | The bound moves from tail value to requirement |
+| The hard bound is required | A sourced requirement rather than K3 | The bound moves from tail value to requirement; K3 itself is already adopted as self-set |
 | Demand for the conjunction | A published complaint or a standard | The justification strengthens |
 | Selection rate and camera motion | 10 Hz slow pan rather than 60 Hz free camera | The model's CPU gap narrows; the CPU comparison is unmeasured |
 | Measured constants b, c, p | Any values | Converts estimates into results; does not change the ranking |
@@ -505,7 +505,7 @@ Path A is the only path on which the engine survives, and it depends on anchors 
 1. Is a conditional advantage, true only in an anchored thin-client or metered scenario, sufficient for a COMP4299 system-development project?
 2. If the comparison shows no unconditional advantage, is Path B (comparison as contribution) or Path C (change topic) preferred?
 3. What client class would be accepted as thin and hard-bounded for S2?
-4. Is the hard per-client bound (K3) acceptable as a self-set engineering requirement, or must it be sourced from a standard or a deployment?
+4. K3 is adopted as a self-set requirement (decision, 2026-10-19). The remaining question is procedural: is a self-set bound acceptable to the supervisor as the project's stated requirement, or must it be sourced from a standard or deployment?
 5. Which line has data or hardware available this term?
 6. Should any design that touches a model be assessed under COMP4299 or CSAI4299?
 7. Are the expected deliverables a dissertation only, or also a demo and benchmarks?
