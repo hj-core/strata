@@ -28,7 +28,7 @@ The comparison does not show an unconditional advantage.
 K3 is ≤ 5,000 active entries per viewer per frame in the worst case, where an entry is a device instance or a blended group entry (PRD-001 K3, FR-VS-07); the S0 comparison uses the tighter B = 2,000 perceptual budget (Table 3.1).
 
 1. **Without K3**, no design dominates on the quantified metrics among packages that meet the S0 consumer profile: fine-grained interest delivery and the server-side cut tie on egress (~13 KB/s per client); broadcast is approximately 5× worse (the ratio of devices to entry budget, `N/B`); the server-side cut is expected to pay more server CPU at a 60 Hz selection rate, but the magnitude is unmeasured. This reference comparison prices the constraint; it is not the project question.
-2. **Under K3**, the free-camera feasible set narrows to the server-side cut (D3/D4). D2f's subscription is soft, and D1/D2c/D5 are unbounded. The comparison is then a premium, not an advantage: D3/D4 match D2f on egress and pay a build and CPU premium; within the feasible set, D4 trades ~15 h of build for O(B) client memory against D3. K3 is **adopted as a self-set constraint** (decision, 2026-10-19); it is declared, not sourced externally.
+2. **Under K3**, the free-camera feasible set narrows to the server-side cut (D3/D4). D1/D5 are unbounded; D2f and D2c are soft. The comparison is then a premium, not an advantage: D3/D4 match D2f on egress and pay a build and CPU premium; within the feasible set, D4 trades ~15 h of build for O(B) client memory against D3. K3 is **adopted as a self-set constraint** (decision, 2026-10-19); it is declared, not sourced externally.
 3. The cut's niche is conditional on a thin client (S2) or scattered, metered consumers (S4). Neither is fully anchored: S2 lacks a client class, and its likely anchors (HMI, kiosk, panel) are guided views, where D6 wins; S4's metering is anchored, but its scatter is not (candidate: fleet/maritime).
 4. No published demand was found for the conjunction of bounded, exact, consistent, per-consumer delivery under a live cut. Published demand exists for plain aggregation.
 5. The comparison therefore supports a conditional claim in a narrow niche, not a general advantage.
@@ -281,7 +281,7 @@ This dimension affects build cost and comparability, not the ranking. It cannot 
 
 | Option | Artifacts | Client memory at 10k | Semantic control | Build cost | Changes the ranking? | Verdict |
 | --- | --- | --- | --- | --- | --- | --- |
-| Manifest only | One | ~4 MB, or O(B) with lazy loading | Full | Medium | No | Preferred |
+| Manifest only | One | ~4 MB, or O(B) with lazy manifest | Full | Medium; lazy variant +~15 h | No | Preferred |
 | Tileset | Tileset plus content plus manifest; two sources of truth | O(N) tree plus metadata | Library-defined; loses B and blended entries | Medium | No | Cross-check only |
 | Regular cells plus own check | Manifest plus cells | O(B) with lazy manifest | Full | Medium | No | Acceptable alternative |
 
@@ -316,7 +316,7 @@ Transport and encoding are separate choices but are coupled through membership. 
 
 ### 4.7 Encoding: alternatives and costs
 
-The encoding alternatives are the rows of the matrix in §4.6. Flat fixed-set has no identity cost and requires a fixed layout. Self-describing records pay 1–2 B of identity per sent entry and are best when few entries change or membership churns. Slot table plus flat pays identity only on membership change, is best when many entries change but membership is stable, and requires a keyframe on desync. For the frontier delta at S0, self-describing records cost ~15 KB/s and the slot table ~13 KB/s. Neither choice changes the ranking; it changes absolute bytes. Appendix B gives worked byte-level examples and the S0 costs.
+The encoding alternatives are the rows of the matrix in §4.6. Flat fixed-set has no identity cost and requires a fixed layout. Self-describing records pay 1–2 B of identity per sent entry and are best when few entries change or membership churns. Slot table plus flat pays identity only on membership change, is best when many entries change but membership is stable, and requires a keyframe on desync. For the frontier delta at S0, self-describing records cost ~15 KB/s and the slot table ~13 KB/s on the base-case 1.5-slot average; Appendix B gives ~16 and ~14 KB/s under independent per-slot `p = 0.5`. Neither choice changes the ranking; it changes absolute bytes. Appendix B gives worked byte-level examples and the S0 costs.
 
 ### 4.8 Client-memory strategy
 
@@ -373,7 +373,7 @@ Assumptions: f32 values, m = 3, c = 3, G = 180, p = 0.5 assumed, 1 Hz egress. Se
 | D5 | site-wide; 65 KB/s divided by k | 0.021 divided by k | fanout only | ~0.5–2 | ~4 MB | ~1,030–1,100 | None | Yes | ~20 |
 | D6 | room (~625 devices); 4 KB/s | 0.0013 | routing | ~0.1–0.5 | ~4 MB + subtree (~0.02–0.04 MB); ~0.02–0.04 MB with lazy manifest | ~1,020–1,080 | Soft unless capped | Yes | ~10 |
 
-**Labels for the new columns.** Server CPU is **unmeasured**; the per-viewer basis is defined in §4.1, and the cut+encode range is a model hypothesis, not a result. Client CPU and p99 latency are also assumed order-of-magnitude ranges, not measurements; they complete the §2.2 vector and are swept. At S0, latency is dominated by the 1 Hz egress cadence (Table 3.2), so the ranges overlap and do not change the ranking; the ~1 s p99 follows from the cadence, not from package latency. D6's lower figures reflect its narrower delivered set, not a free-camera capability. Client memory for the D2c and D6 scopes is descriptors plus values on the §4.8 per-entry basis; D4's total includes the client runtime.
+**Labels for the new columns.** Server CPU is **unmeasured**; the per-viewer basis is defined in §4.1, and the cut+encode range is a model hypothesis, not a result. Client CPU and p99 latency are also assumed order-of-magnitude ranges, not measurements; they complete the §2.2 vector and are swept. At S0, latency is dominated by the 1 Hz egress cadence (Table 3.2), so the ranges overlap and do not change the ranking; the ~1 s p99 follows from the cadence, not from package latency. D6's lower figures reflect its narrower delivered set, not a free-camera capability. Client memory for the D2c and D6 scopes is descriptors plus values on the §4.8 per-entry basis; D4's total includes the client runtime. Egress uses the base-case 1.5-slot average; Appendix B gives ~14 KB/s for the frontier and ~16 KB/s for the records under independent per-slot `p = 0.5`, with the ranking unchanged.
 
 **D2c's build cost.** D2c avoids the shared cut crate (no WASM frontier cut), so its marginal build is ~15 h rather than D2f's ~20 h; that is its surviving trade against D2f.
 
@@ -383,18 +383,18 @@ Assumptions: f32 values, m = 3, c = 3, G = 180, p = 0.5 assumed, 1 Hz egress. Se
 
 **Manifest egress is a connection cost, not a per-tick rate.** Table 5.3 excludes it. A full JSON manifest is ~4 MB at 10k devices and ~40 MB at 100k (derived from the manifest footprint in §4.8; format-dependent). At S0's 13 KB/s frontier, that equals ~5 min of frontier egress at 10k and ~51 min at 100k; over an 8 h session it amortises to ~0.14 KB/s and ~1.4 KB/s. It matters for short or intermittent sessions and at 100k, and is reduced by a compact binary format, client cache/versioning, and a lazy manifest. It is reported separately: it does not change the per-tick ranking, but it can dominate a short session and must not be hidden.
 
-The egress ratio is `N/B`, not a bandwidth saving. Broadcast sends the whole state; the cut sends the frontier. Both scale with the changed fraction, so the ratio cancels `p` and `r`:
+The egress ratio is approximately `N/B`, not a bandwidth saving. Broadcast sends the whole state; the cut sends the frontier. Both scale with the changed fraction, so the ratio cancels `p` and `r`:
 
 ```
-D1 / D3 = (N × m) / (B × m) = N / B
+D1 / D3 ≈ (N × m) / (B × m) = N / B
 ```
 
-At N = 10,000 and B = 2,000 the ratio is 5×. At 100,000 and B = 5,000 it is 20×. The lever is B, and B is a perceptual cap, not a physical one.
+The approximation ignores the 540 group-channel values and the bitmap/mask overheads; the printed 65 and 13 KB/s include them, so the ratio is approximately 5×, not exactly (about 20× at 100,000/5,000). The lever is B, and B is a perceptual cap, not a physical one.
 
 At S0:
 
 - On egress, D2f, D3 and D4 tie at approximately $0.0042 per client-hour (about $3.1 per continuous month). D1 is 5× worse. D6 is cheapest but serves only an explicitly selected subtree.
-- On server CPU, the server cut is expected to cost more than routing; the magnitude is unmeasured. The model range is 0.014–0.034 core/viewer at 60 Hz; at 10 Hz the model overlaps routing (a model tie).
+- On server CPU, the server cut is expected to cost more than routing; the magnitude is unmeasured. The model range is 0.014–0.034 core/viewer at 60 Hz; at 10 Hz the cut model is assumed to overlap routing, but routing is unmeasured, so this is an assumption, not a result.
 - On client memory, nothing binds: 4 MB is trivial for a laptop. D4's O(B) advantage is real but irrelevant at S0.
 - On the new columns, the ranges overlap. D1/D5 carry O(N) client culling; D2f carries the WASM cut; D2c carries client aggregation; D3/D4 draw only the delivered slice.
 - **In the reference set (without K3), no package dominates among D1–D5 on the quantified metrics.** CPU is unmeasured, so this is conditional. D6 dominates D2f on the printed metrics, but it does not meet S0's free-camera requirement; that is why the requirement is stated formally above.
@@ -425,14 +425,14 @@ Within the feasible set, D4 is better on client memory and worse on build cost a
 | S3 high fan-out | D2f on CPU (model; unmeasured) | D3, D4 (rising CPU, still ~1/3 of the model wall at V = 100) | Per-viewer cut cost is linear in V; routing is not |
 | S4 scattered metered | D3, D4 if the hard bound is required; otherwise D2f on cost | D1, D5 | D2f ties on egress and is cheaper to build; D3/D4 add the hard bound. A relay cannot amortise without a shared point of presence |
 
-**S2's consumer profile.** S2 is defined as a client-class change, but the thin clients one can anchor (embedded HMI, kiosk, low-end panel) are usually guided-view consumers. If S2 holds S0's free camera, D4 is the memory winner. If the anchor is a guided view, the consumer profile has changed as well, and D6 with a scope-limited lazy manifest and a server-enforced cap (where K3 applies) is O(subtree), avoids the camera loop, and is cheaper to build (~25 h vs ~85 h). The S2 result is therefore conditional on the free-camera profile.
+**S2's consumer profile.** S2 is defined as a client-class change, but the thin clients one can anchor (embedded HMI, kiosk, low-end panel) are usually guided-view consumers. If S2 holds S0's free camera, D4 is the memory winner. If the anchor is a guided view, the consumer profile has changed as well, and D6 with a scope-limited lazy manifest and a server-enforced cap (where K3 applies) is O(subtree), avoids the camera loop, and is cheaper to build (~25 h = D6 ~10 h + lazy manifest ~15 h, against D4 ~85 h). The S2 result is therefore conditional on the free-camera profile.
 
 ### 5.5 Verdict
 
 The engine's case is conditional, and **no condition is fully anchored**.
 
 - **Under K3**, the free-camera feasible set is D3 and D4. D1, D2c, D2f and D5 do not satisfy the hard bound; they are reference packages that price the constraint. Within the feasible set, D4 adds O(B) client memory at ~15 h over D3; D3 is cheaper to build but O(N) client memory. That is a trade, not a dominance.
-- **The price of K3** is the difference between D2f and D3/D4: the same egress (~13 KB/s), a build premium of ~50–65 h, and higher server CPU at 60 Hz (model; unmeasured). At 10 Hz the CPU model is a tie. This premium, not an egress saving, is what the bound buys.
+- **The price of K3** is the difference between D2f and D3/D4: the same egress (~13 KB/s base case; ~14 under Appendix B), a build premium of ~50–65 h, and higher server CPU at 60 Hz (model; unmeasured). At 10 Hz the cut model is assumed to overlap routing; routing is unmeasured. This premium, not an egress saving, is what the bound buys.
 - **Without K3**, no design dominates: D2f ties D3 on egress and is expected to be cheaper on CPU; D1 wins on LAN; D6 wins for a guided consumer. The unconstrained comparison is reported because it prices the bound, not because it is the project question.
 - The hard bound is **self-set (K3)**. Exact aggregation of the unseen and a shared cross-viewer snapshot accompany it but are not unique: D2f and D6 also aggregate server-side, and a broadcast snapshot is shared. Consistency and exactness are properties of a centralised design rather than demands (§39, §64).
 - The demand test still fails for the conjunction. Published demand exists for aggregation, not for bounded, exact, consistent, per-consumer delivery under a live cut.
@@ -447,7 +447,7 @@ If the consumer instead names what it needs — a guided view, a drill-down — 
 
 **Consumer-profile sweep.** The two ends are a free camera, where D1–D5 compete as in §5.3, and a named subtree or guided view, where D6 serves the need at ~4 KB/s and the cut is unnecessary. The engine's case exists only in the first; the second is the modal deployment described in §74.
 
-The engine's case appears only when a variant is anchored: a thin client with a hard memory bound **that retains the free camera** (S2), or scattered consumers on metered links (S4). In S4, fine interest ties it on egress; in S2, it approaches the same egress via a coarse-top lazy descent. In both cases the remaining difference is the hard bound with server-authoritative relevance. Exact aggregation of the unseen is also available under fine interest's server-side aggregation. If the thin client is guided, D6 is the memory winner and the cut is unnecessary. ANL-001 states the same result functionally against the closest existing stack at 30k EPS.
+The engine's case appears only when a variant is anchored: a thin client with a hard memory bound **that retains the free camera** (S2), or scattered consumers on metered links (S4). In S4, fine interest ties it on egress; in S2, it approaches the same egress via a coarse-top lazy descent. In both cases the remaining difference is the hard bound with server-authoritative relevance. Exact aggregation of the unseen is also available under fine interest's server-side aggregation. If the thin client is guided, D6 is the memory winner and the cut is unnecessary. ANL-001 states the same result functionally against the existing-solution landscape at 30k EPS.
 
 ### 6.2 Sensitivity ranking
 
@@ -572,7 +572,7 @@ Worked cases:
 4. Frame with churn, `{100,105,109,120} → {100,105,112,120}` with 100 unchanged: `header 10 + removal 2 + 6 + 15 + 6 = 39 B`.
 5. Steady frame, only 105 changes: `header 10 + record 6 = 16 B`.
 
-**Slot-table variant.** The server assigns slots 0…P−1 and sends the mapping only on change. Each tick sends a bitmap over slots (P/8 = 250 B at P = 2,000) plus mask and values per changed entry. At S0: `250 B + 1,750 × ~7 B average ≈ 12.5 KB`, against ~15 KB for records; the average is 1 B mask plus 1.5 changed slots × 4 B. The 1.5-slot average is a modelling assumption; under independent per-slot `p = 0.5`, the conditional average is ~1.7. Both estimates rise — the slot table to ~14 KB/s and the record encoding to ~16 KB/s — and the ranking is unchanged. The bitmap wins when `0.125P < 1.5S`, approximately 8% of entries changing.
+**Slot-table variant.** The server assigns slots 0…P−1 and sends the mapping only on change. Each tick sends a bitmap over slots (P/8 = 250 B at P = 2,000) plus mask and values per changed entry. At S0: `250 B + 1,750 × ~7 B average ≈ 12.5 KB`, against ~15 KB for records; the average is 1 B mask plus 1.5 changed slots × 4 B. The 1.5-slot average is a modelling assumption; under independent per-slot `p = 0.5`, the conditional average is ~1.7. Both estimates rise — the slot table to ~14 KB/s and the record encoding to ~16 KB/s — and the ranking is unchanged. The bitmap wins when `0.125P < S`, approximately 12.5% of entries changing, under the printed accounting (the slot variant pays 1 B mask plus 1.5 changed slots × 4 B per changed entry; the record variant pays ~8 B).
 
 **State-based sync.** A client can retain its last set and diff an incoming full set. This is robust (idempotent, no keyframe protocol, no desync) but does not save bytes: unchanged entries are resent. At S0 a full frontier is ~26 KB/tick against ~13 KB for the delta. The client copy is necessary to apply a delta but not sufficient to produce one; producing one requires the sender to know the receiver's baseline.
 

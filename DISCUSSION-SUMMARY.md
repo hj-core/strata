@@ -3,14 +3,14 @@
 | Field | Value |
 | --- | --- |
 | Document | DISCUSSION-SUMMARY |
-| Date | 2026-10-19 (nine sessions: 2026-10-12 → 2026-10-19) |
+| Date | 2026-10-20 (ten sessions: 2026-10-12 → 2026-10-20) |
 | Subject | Review of a proposed FYP: server-side spatial filtering engine for 3D digital-twin visualization |
-| Artifacts reviewed | `docs/PRD-001`, `docs/TDD-001`, `docs/PLN-001` |
-| Participants | Supervisor (critic) and student (author); later a viva-style exchange |
+| Artifacts reviewed | `docs/DEC-001`, `docs/ANL-001`, `docs/PRD-001`, `docs/TDD-001`, `docs/PLN-001` |
+| Participants | Supervisor (critic) and student (author); later a viva-style exchange; Part X is a document-correctness working session |
 
-**Purpose.** A resumable record of the review. Section numbers are stable and are cited by `DEC-001` and the build handover. Unless labelled otherwise, figures in Parts I–VIII are first-principles estimates against stated constants, not measurements; Part IX adds cited literature.
+**Purpose.** A resumable record of the review. Section numbers are stable and are cited by `DEC-001` and the build handover. Unless labelled otherwise, figures in Parts I–VIII are first-principles estimates against stated constants, not measurements; Part IX adds cited literature; Part X records the DEC-001/ANL-001 correctness pass, and its figures are derived or assumed.
 
-**Editorial note.** Condensed 2026-10-19: repeated restatements and superseded status sections were collapsed; all 141 section numbers and the evidence tables are retained. The pre-condensation text remains in git history.
+**Editorial note.** Condensed 2026-10-19: repeated restatements and superseded status sections were collapsed; all 141 section numbers and the evidence tables are retained. Part X (2026-10-20) adds §142–§150 without renumbering earlier sections. The pre-condensation text remains in git history.
 
 | Part | Sections | Session | Focus |
 | --- | --- | --- | --- |
@@ -23,6 +23,7 @@
 | VII | §93–§98 | 10-17 | Drift critique, "trivial" question, calibration |
 | VIII | §99–§116 | 10-17 | Track closure, competitor hunt, design space |
 | IX | §117–§141 | 10-17→19 | Defensibility, disclosure, supervisor fit, trust |
+| X | §142–§150 | 10-20 | DEC-001 correctness, ANL-001, bitmask, SQL/Rust, review |
 
 ---
 
@@ -1377,3 +1378,103 @@ The engine's parts can appear (hierarchy, aggregation, filtering), but the **eng
 - The **supervisor's profile** is the strongest practical asset: **last-author** lines (edge AI, bird monitoring, floor plans) provide data, hardware, supervision; middle-author collaborations are weaker.
 - The **engine** retains value as a **portfolio** piece (conditional on building/measuring) and as **analysis** (coupling, design space, commodity audit) — not as the FYP contribution.
 - **Status:** track fixed; candidate, anchor, and module fit open; next move is a **supervisor conversation** with 2–3 one-paragraph candidates and two questions (data/hardware; COMP4299 vs CSAI4299).
+
+---
+
+# Part X — DEC-001 correctness, ANL-001, and the bitmask question (tenth session)
+
+Part X records the 2026-10-20 working session. It is not a supervisor meeting; it is the document-correctness pass that prepares for one. The supervisor conversation remains the gate.
+
+## 142. Orientation
+
+The session moved from topic search to making `DEC-001` correct for the supervisor, then to the engine's non-cut pipeline. Settled inputs: COMP4299 system-development; K3 adopted as a self-set constraint; the geometric cut's demand is unproven; the analysis is the asset. The session did not start a build and did not choose a path.
+
+Documents: `DEC-001` v0.4.0; `ANL-001` v0.2.0 (new annex). The functionality contrast was moved out of `DEC-001` §6.6 into `ANL-001`; `DEC-001` §6.6 is a pointer.
+
+## 143. K3 as a constraint, not a metric
+
+K3 is ≤ 5,000 active entries per viewer per frame in the worst case, where an entry is a device instance or a blended group entry (PRD K3, FR-VS-07). The S0 comparison uses the tighter B = 2,000 perceptual budget.
+
+The question splits in two:
+
+- **Without K3:** no design dominates. D2f and D3 tie on egress (~13 KB/s; ~14 under the independent-slot correction); broadcast is ~5× worse (`N/B`); D1 wins on LAN; D6 wins for a guided consumer.
+- **Under K3:** the free-camera feasible set is D3/D4. D1/D5 are unbounded; D2f/D2c are soft. D3/D4 match D2f on egress and pay a build premium (~50–65 h) and higher 60 Hz CPU. Within the set, D4 trades ~15 h of build for `O(B)` client memory against D3.
+
+The result is a **premium**, not an advantage. K3 is self-set; the conclusion is conditional on accepting it.
+
+## 144. S2, D6, D2c, D5
+
+- **S2 is conditional on the free camera.** The likely thin-client anchors (HMI, kiosk, panel) are guided views; a guided thin client is served by D6 with a scope-limited lazy manifest and a server-enforced cap at `O(subtree)`, ~25 h (D6 ~10 h + lazy manifest ~15 h) against D4 ~85 h. If the S2 anchor is guided, the cut is unnecessary.
+- **D2c is in S0 only as a camera-following region subscription.** A fixed region is a guided view and belongs outside S0 with D6; its consistency is a full region state.
+- **D5 is an unbounded reference.** D1/D5 are unbounded; D2f/D2c are soft.
+- **D6 bound:** soft unless server-capped; a capped explicit subscription can be hard, but without geometric relevance, and it cannot follow a free camera.
+
+## 145. The topology is a tree
+
+The node hierarchy is a tree: exactly one root; every non-root node has exactly one parent; no cycles; devices are leaves and each device attaches to exactly one group (PRD FR-TD-01/FR-TD-07; TDD §4.5).
+
+The channel wiring is layered over that tree: a device metric feeds channels of its containing group; a group channel feeds channels of its parent group; a parent channel may receive several child channels and local metrics (fan-in); a channel may feed several parent channels (fan-out). All edges go to the unique parent group. There are **no multi-parent nodes and no cross-links**. The contribution graph is acyclic but is not a multi-parent DAG.
+
+Consequences:
+
+- The aggregation order is a post-order over the tree, not a general DAG topological sort.
+- A recursive CTE over parent-child is sufficient for the topology; the channel edge table handles fan-in/fan-out.
+- The SQL baseline is stronger than the earlier “contribution DAG” phrasing implied. The hard part is the channel wiring and the semantic contract, not graph traversal.
+- The bitmask rollup is a bottom-up tree pass with channel wiring, not a general DAG traversal.
+
+## 146. ANL-001: the engine's highlights
+
+`ANL-001` sets the cut aside and states the engine's defensible highlights:
+
+1. **Exact rollup over a tree with channel wiring:** fan-in/fan-out within the unique parent edge, same-unit/same-reduction, exact mean/count, per-metric freshness, no-value channels, attention/absence, canonical bit-exact order.
+2. **Shared frame snapshot independent of viewers:** one rollup per frame, double-buffered, all viewers on the same snapshot.
+3. **Mask-aware aggregation (candidate):** the aggregate reflects only authorized contributions, with per-mask classes and a shared-cost correction/tree.
+
+What remains commodity at 30k EPS: ingest, hot state, simple tree rollup, snapshot queries, policy engines, brokers, renderers. The stack handles the scale; the gap is the semantic contract and the guarantees.
+
+The framework landscape: Materialize (closest for SQL/IVM, recursive CTEs), Flink/Kafka Streams (custom stateful topologies), Hazelcast/Ignite (hot state), Redis (state cache), TimescaleDB/ClickHouse (time-window rollups, not semantic trees), twin platforms (twin semantics, not 30k exact rollups).
+
+The “cannot handle” claim is scoped to the **conjunction**, not the scale: a 60 Hz, shared, bit-exact rollup over a tree with channel wiring, per-metric freshness, no-value, attention, and a global frame snapshot. Each part is expressible; the guarantees are not generic.
+
+## 147. Bitmask access control
+
+Access control is a **candidate requirement**, not a sourced one. PRD §10 places authentication and authorization out of scope; DISCUSSION §127 is a candidate direction. Unlike K3, it is not self-adopted.
+
+The mask is **per device** (10,000 bits ≈ 1.25 KB per consumer). Aggregation expands it to metric slots (30,000; ≈3.75 KB if materialized). Two masks must be distinguished:
+
+- **Raw delivery mask:** which entries may be delivered; apply at cut/encode; the global rollup remains.
+- **Aggregate mask:** which contributions may enter the viewer's aggregate; apply before the reduction; the aggregate is per mask class.
+
+A raw-only mask is cheap and commodity. An aggregate mask breaks the single shared global rollup: the same channel has a different value per distinct mask. SQL can express the per-mask aggregation with a mask relation and `GROUP BY mask_class, channel`; the cost scales with mask cardinality, not just V. At 1 Hz/V = 10 it is comfortable; at 60 Hz/V = 100 it must be measured.
+
+The engine's candidate advantage is a **shared-cost masked rollup**: one global pass, per-mask classes, global-minus-unauthorized for sum/count/mean, and a mask-aware tree for min/max/attention. The exactness caveat: global-minus-unauthorized is not bit-exact to a direct masked reduction in f32; if K4 exactness applies to masked aggregates, use a direct per-class canonical pass or exact arithmetic. The bitmask is authorization, not privacy; inference and differencing remain.
+
+## 148. SQL versus the Rust rollup
+
+“SQL” is a language, not one engine. PostgreSQL, Materialize, RisingWave, Flink SQL, and ClickHouse have different execution models. At 30k EPS the scale is trivial; the question is semantics and latency, not throughput.
+
+- SQL recurses: `WITH RECURSIVE` in PostgreSQL and others; Materialize's `WITH MUTUALLY RECURSIVE` is incremental; RisingWave's recursive CTE is limited (#15135); Flink SQL and ksqlDB generally do not support recursive CTEs.
+- SQL can provide consistent aggregation snapshots at the database/view level (MVCC, Materialize timestamps). It does not provide the engine's **shared frame snapshot plus per-viewer delta baselines** out of the box.
+- The Rust rollup is a specialized dataflow: fixed topology, precompiled contribution lists, contiguous arrays, no per-query planning, SIMD, canonical order, double-buffered frame. SQL is a general query engine: planning, joins, MVCC, generic operators.
+- Likely outcomes: SQL is good enough at 1 Hz/simple rollups; Rust has a structural advantage at 60 Hz/exact/masked/shared snapshot. This must be measured, not asserted. “Rust is faster than SQL” is not a defensible claim; “the specialized dataflow meets the contract predictably” is.
+
+## 149. Review audit
+
+A fresh `review` session audited `DEC-001` v0.4.0 and `ANL-001` v0.2.0: **0 critical, 3 high, 5 medium, 5 low**. Core conclusions survived; the findings were framing and consistency.
+
+- **H1:** ANL-001 called access control a sourced requirement; corrected to a candidate requirement (PRD §10 out of scope; DISCUSSION §127 candidate; not self-adopted).
+- **H2:** mask granularity contradicted itself (10k devices vs 30k metrics); fixed to a per-device mask with metric-slot expansion.
+- **H3:** DEC-001 §1.3 called D2c unbounded; corrected to D2f/D2c soft, D1/D5 unbounded.
+- **M1–M5:** 10 Hz CPU overlap is an assumption; “view per mask” corrected to a mask-class view with cost scaling; “no child leakage” corrected to “no direct leakage; inference/differencing remain”; §4.4 notes the lazy manifest's ~15 h; 13/15 KB/s labelled base case vs Appendix B's ~14/16.
+- **L1–L5:** break-even 12.5%; 25 h derivation; `N/B` approximate; “available unauthorized”; ANL contrasts a landscape, not one stack.
+
+Verification pass: all fixes pass; ready for the supervisor. Review session: `ses_ea8c8529fffePn16RPUCljzDgc`, tracked outside the project at `/private/var/folders/py/tgxh0jws1xs34r2rbbgrnhxw0000gn/T/opencode/strata-review-session.md`; future reviews resume it by default.
+
+## 150. State and next steps
+
+- **DEC-001:** v0.4.0; K3 self-set constraint; D3/D4 feasible under K3; S2 conditional on free camera; D2c camera-following; D5 reference.
+- **ANL-001:** v0.2.0; highlights the exact tree-plus-channel-wiring rollup, shared frame snapshot, and candidate mask-aware aggregation; the SQL/streaming stack is commodity at 30k EPS, not the full contract.
+- **Topology:** single-rooted tree; one parent per non-root node; channel fan-in/fan-out only within the unique parent edge; no multi-parent nodes.
+- **Bitmask:** candidate requirement; per-device mask (10k bits, 1.25 KB); raw vs aggregate; per-mask classes; exactness caveat; not privacy.
+- **Supervisor meeting:** still the gate. No build. No commit.
+- **Next:** the supervisor questions (K3 acceptance, S2/free camera, S4 scatter, module fit, deliverables). If the bitmask is pursued, run the failing-baseline SQL benchmark at V = 10/100 and 1/60 Hz, with sum/mean/min/max/attention and exactness; if the cut/policy is pursued, name the anchor. The analysis remains the asset.

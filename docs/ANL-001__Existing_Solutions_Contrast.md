@@ -75,14 +75,14 @@ A generic SQL stack can give a consistent snapshot per query, but:
 
 ## 5. Highlight 3 — Mask-aware aggregation (bitmask access control)
 
-This is the candidate extension. It is the strongest potential differentiator because access control is a **sourced requirement**, unlike K3.
+This is the candidate extension. It is the strongest potential differentiator because access control is a **candidate requirement** (DISCUSSION-SUMMARY §127), not a PRD requirement: PRD-001 §10 places authentication and authorization out of scope, and unlike K3 this is not even self-adopted.
 
 ### 5.1 The model
 
-Each consumer `v` has an authorization bitmask `A_v` over the leaf set (device metrics). For a channel `c` with contribution sources `S_c`, the consumer’s value is the reduction over the sources that are authorized:
+Each consumer `v` has an authorization bitmask `A_v` over the **device set** (10,000 devices; ~1.25 KB per consumer). A metric source is authorized iff its device is authorized; aggregation expands the device mask to its metric slots (30,000 slots; ~3.75 KB if the expanded mask is materialized). For a channel `c` with contribution sources `S_c`, the consumer’s value is the reduction over the authorized sources:
 
 ```
-value_v(c) = reduce({ s ∈ S_c : s ∈ A_v })
+value_v(c) = reduce({ s ∈ S_c : device(s) ∈ A_v })
 ```
 
 Child channels are reduced recursively with the same mask. The mask is applied **before** the reduction, not after serialization. The topology stays a tree; only the channel wiring fans out and fans in. The masked rollup is therefore a bottom-up pass over the tree, with the mask applied to each channel’s local metric sources and child-channel contributions.
@@ -93,8 +93,8 @@ The consequence is structural: the same channel can have a different value for e
 
 | Reduction | Mask-aware computation | Cost |
 | --- | --- | --- |
-| `sum`, `count` | Global value minus the unauthorized contributions; or a masked scan | `O(unauthorized)` correction, or `O(authorized)` masked scan |
-| `mean` | Masked sum and masked count; `mean = sum / count` | `O(unauthorized)` correction, or `O(authorized)` masked scan |
+| `sum`, `count` | Global value minus the **available** unauthorized contributions; or a masked scan | `O(unauthorized)` correction, or `O(authorized)` masked scan |
+| `mean` | Global sum and count minus the available unauthorized sum and count; `mean = sum / count` | `O(unauthorized)` correction, or `O(authorized)` masked scan |
 | `min`, `max`, attention | A global min/max is insufficient; need a mask-aware tree or a scan of authorized sources | `O(log N)` for structured masks; `O(k)` for arbitrary masks |
 | `no-value` | A channel with no authorized available contribution reports no value | Per-channel check |
 
@@ -116,11 +116,13 @@ JOIN values v ON v.leaf_id = c.leaf_id
 GROUP BY m.consumer_id, c.channel_id;
 ```
 
+The policy mask is per device; the `masks` relation is its resolved metric-level expansion.
+
 It can do `SUM`/`COUNT`/`MIN`/`MAX` per consumer, with `FILTER` for availability and `CASE` for attention. It can use bitwise operators if the mask is a bitmap, and bitmap indexes can help. A recursive CTE over the parent-child tree is sufficient for the topology; the channel edge table handles fan-in/fan-out, so no general graph traversal is required.
 
-It **cannot** preserve the single shared materialized view when the mask changes which contributions count:
+What is not available is the single shared global rollup:
 
-- A view per distinct mask (or per consumer) is needed; the number of views scales with the mask cardinality.
+- A view keyed by `(mask class, channel)` is expressible, but its size and per-update recomputation scale with mask cardinality.
 - A parameterized query per consumer is possible, but the cost is `O(V × contributions)` per cadence; at 1 Hz and V = 10 this is fine; at 60 Hz and V = 100 it is not obviously fine.
 - A global aggregate plus an output filter leaks unauthorized contributions through the aggregate.
 - `MIN`/`MAX`/attention cannot be corrected from a global value; SQL must scan the masked join or maintain a custom structure.
@@ -155,7 +157,7 @@ Masking the aggregate is not the same as masking raw readings. Four policies are
 | Policy | What the consumer sees | Leakage |
 | --- | --- | --- |
 | Raw mask | Only authorized raw readings; aggregates over the full hierarchy | Aggregate may reveal unauthorized children |
-| Aggregate mask | Aggregates over authorized contributions only | Exact masked rollup; no child leakage through the aggregate |
+| Aggregate mask | Aggregates over authorized contributions only | Exact masked rollup; no direct leakage of unauthorized child values, but inference and differencing remain |
 | Suppress | A group is withheld if any child is unauthorized | All-or-nothing; safe but coarse |
 | Aggregate + suppression | Masked aggregate, suppressed when the group is too small or too revealing | Disclosure control; not exact for small groups |
 
@@ -211,12 +213,12 @@ If the stack passes, the highlight is not real. If it fails, the failure is the 
 - **Position on the semantic contract:** exact, deterministic, availability-aware, attention-aware rollup over a tree with channel wiring, with a shared frame snapshot.
 - **Position on mask-aware aggregation** if the access requirement is real: the aggregate reflects only authorized contributions, and the cost is shared across consumers with the same mask. This is the candidate differentiator.
 - **The cut or policy is a consumer** of the contract, not the whole engine. The contract is the durable asset.
-- **Demand caveat.** Access control is sourced; the specific demand for exact, masked, live rollups is not. The bitmask differentiator must be tested like the cut: name the consumer, the policy, and the failing baseline.
+- **Demand caveat.** Access control is a candidate direction (DISCUSSION-SUMMARY §127), not a sourced requirement; the specific demand for exact, masked, live rollups is unproven. The bitmask differentiator must be tested like the cut: name the consumer, the policy, and the failing baseline.
 
 ## 10. Summary
 
 - At 30k EPS, hot state, simple rollup, and snapshot are commodity; the scale is not the moat.
 - The engine’s highlights are the tree-plus-channel-wiring semantics, the shared frame snapshot, and mask-aware aggregation.
-- SQL can express each part, but not the single shared rollup under arbitrary per-consumer masks; per-consumer SQL scales with the number of masks.
+- SQL can express each part, but not the single shared rollup under arbitrary per-consumer masks; per-consumer SQL scales with V, and per-mask views scale with mask cardinality.
 - The bitmask does not rule out SQL; it rules out the shared global view. That is the gap to test.
 - If the semantic contract is not required, existing frameworks are sufficient at 30k EPS.
