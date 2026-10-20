@@ -6,7 +6,7 @@
 | Title | Design comparison for bounded per-consumer delivery of live telemetry |
 | Version | 0.4.0 |
 | Status | Draft — for supervisor discussion |
-| Last Updated | 2026-10-19 |
+| Last Updated | 2026-10-20 |
 | Related documents | DISCUSSION-SUMMARY (Parts I–IX, §1–§141), PRD-001, TDD-001, PLN-001, ANL-001 |
 
 ## 1. Purpose and question
@@ -21,14 +21,16 @@ The document is written to be audited: every parameter has an external anchor or
 
 > Under an anchored reference scenario, which placement of selection and aggregation minimises delivery cost subject to a hard per-client bound (K3, self-set), and under what conditions, if any, does the server-side cut outperform the alternatives?
 
+K3 is self-set and unanchored, so the comparison reports both the constrained and unconstrained results. §1.3 treats the unconstrained comparison as the realistic baseline and the K3-feasible comparison as the conditional case.
+
 ### 1.3 Short answer
 
 The comparison does not show an unconditional advantage.
 
-K3 is ≤ 5,000 active entries per viewer per frame in the worst case, where an entry is a device instance or a blended group entry (PRD-001 K3, FR-VS-07); the S0 comparison uses the tighter B = 2,000 perceptual budget (Table 3.1).
+K3 is ≤ 5,000 active entries per viewer per frame in the worst case, where an entry is a device instance or a blended group entry (legacy PRD K3, FR-VS-07); the S0 comparison uses the tighter B = 2,000 perceptual budget (Table 3.1).
 
-1. **Without K3**, no design dominates on the quantified metrics among packages that meet the S0 consumer profile: fine-grained interest delivery and the server-side cut tie on egress (~13 KB/s per client); broadcast is approximately 5× worse (the ratio of devices to entry budget, `N/B`); the server-side cut is expected to pay more server CPU at a 60 Hz selection rate, but the magnitude is unmeasured. This reference comparison prices the constraint; it is not the project question.
-2. **Under K3**, the free-camera feasible set narrows to the server-side cut (D3/D4). D1/D5 are unbounded; D2f and D2c are soft. The comparison is then a premium, not an advantage: D3/D4 match D2f on egress and pay a build and CPU premium; within the feasible set, D4 trades ~15 h of build for O(B) client memory against D3. K3 is **adopted as a self-set constraint** (decision, 2026-10-19); it is declared, not sourced externally.
+1. **Without K3**, no design dominates on the quantified metrics among packages that meet the S0 consumer profile: fine-grained interest delivery and the server-side cut tie on egress (~13 KB/s per client); broadcast is approximately 5× worse (the ratio of devices to entry budget, `N/B`); the server-side cut is expected to pay more server CPU at a 60 Hz selection rate, but the magnitude is unmeasured. This reference comparison is the realistic baseline; the K3-feasible comparison is the conditional case.
+2. **Under K3**, the free-camera feasible set narrows to the server-side cut (D3/D4). D1/D5 are unbounded; D2f and D2c are soft. The comparison is then a premium, not an advantage: D3/D4 match D2f on egress and pay a build and CPU premium; within the feasible set, D4 trades ~15 h of build for O(B) client memory against D3. K3 is **adopted as a self-set constraint** (decision, 2026-10-19); it is declared, not sourced externally. It has no external anchor and no demand evidence; on the current evidence it is likely not a realistic requirement.
 3. The cut's niche is conditional on a thin client (S2) or scattered, metered consumers (S4). Neither is fully anchored: S2 lacks a client class, and its likely anchors (HMI, kiosk, panel) are guided views, where D6 wins; S4's metering is anchored, but its scatter is not (candidate: fleet/maritime).
 4. No published demand was found for the conjunction of bounded, exact, consistent, per-consumer delivery under a live cut. Published demand exists for plain aggregation.
 5. The comparison therefore supports a conditional claim in a narrow niche, not a general advantage.
@@ -40,6 +42,7 @@ K3 is ≤ 5,000 active entries per viewer per frame in the worst case, where an 
 - It does not claim that a favourable scenario exists; it identifies the conditions one would have to satisfy.
 - It does not present estimates as measurements.
 - It does not claim that the S0 free-camera consumer profile is the modal one; it is the engine's niche case, and §3.1 sweeps it against guided and drill-down consumers.
+- It does not claim that K3 is a real deployment requirement; K3 is self-set, unanchored, and likely not realistic on the current evidence.
 
 ### 1.5 How to read it
 
@@ -67,9 +70,9 @@ The same vector is used for every dimension and every package.
 | Server CPU | cores per viewer; $/hour per client | The server-side cut's expected ceiling; unmeasured |
 | Client memory | MB for metadata and buffers | The cut's client-side claim; binds only for a thin client |
 | Client CPU | ms/frame on the main thread | Thin-client viability |
-| End-to-end latency | p99 ms | Freshness requirement |
+| Server-to-client p99 latency | p99 ms | Freshness requirement; device path excluded in §5.3 |
 | Consistency | snapshot atomicity across viewers: yes/no | Structural value |
-| Bound | hard per-client byte or entry cap: yes/no | Requirement K3 |
+| Bound | hard per-client byte or entry cap: yes/no | Self-set constraint K3 (unanchored) |
 | Build cost | engineer-hours, marginal | The binding constraint on a one-term project |
 
 **Cost convention.** Costs are stated as **rates**, not monthly totals. A month is taken as 730 h, and a total is a rate multiplied by the connected hours.
@@ -85,7 +88,7 @@ Both are attributions, not a total bill; storage, load balancing, and support ar
 
 No weighted score is used. A weighted score conceals the choice of weights, which is the tuning trap in another form.
 
-**Requirement set.** The project question is assessed among packages that meet the S0 consumer profile (Table 3.1) — a free camera over the site — **and K3**, the hard per-client bound. D6 serves only an explicitly named subtree; it is the baseline for the guided-view case, not a candidate under S0. Packages that meet the consumer profile but not K3 (D1, D2f, D2c, D5) are retained as **reference designs**: they price the constraint but cannot be the answer to the question posed.
+**Requirement set.** The project question is assessed among packages that meet the S0 consumer profile (Table 3.1) — a free camera over the site — **and K3**, the hard per-client bound. D6 serves only an explicitly named subtree; it is the baseline for the guided-view case, not a candidate under S0. Packages that meet the consumer profile but not K3 (D1, D2f, D2c, D5) are retained as **reference designs**: they price the constraint and are the realistic baseline. K3 is self-set and unanchored; the constrained comparison is reported as a conditional case, because no consumer or standard was found that imposes a hard entry bound.
 
 **Terms.** *Frontier* = the delivered set under B. *α* = the subscribed fraction under interest. *k* = the relay clustering factor. *Oracle parity* = exact agreement with the brute-force oracle. *Blended entries* = aggregate entries standing in for a subtree. *Hard bound* = a cap on delivered entries or bytes enforced by the sender, with the sender also determining the delivered set. *Soft bound* = a cap that depends on the client's selection or subscription (α), so the sender does not guarantee the delivered set stays within it when the selected set exceeds B.
 
@@ -156,7 +159,7 @@ A mid-size industrial site: approximately 10,000 devices (≈30,000 tags), three
 
 **Note on 1 Hz.** 1 Hz is a reporting rate, not a scan rate. Field devices sample faster and report features; historians store at 1 s for critical tags and 10–60 s for the rest. The value is at the fast end of reporting and the slow end of control, which makes it conservative for a visualization. A heterogeneous mix (0.1–10 Hz) is the realistic variant and is swept.
 
-**Note on freshness.** Freshness is bounded by the egress cadence, because a reading cannot be delivered before the next tick: `freshness ≈ 1 / egress cadence`. K11 specifies p99 ≤ 100 ms at a 60 Hz rate; at the S0 cadence of 1 Hz it is approximately one second. Freshness is therefore a property of the cadence rather than of a package. Meeting K11 exactly would require an egress rate of at least 10 Hz, multiplying egress and compute by ten without changing the ranking.
+**Note on freshness.** Freshness is bounded by the egress cadence, because a reading cannot be delivered before the next tick: `freshness ≈ 1 / egress cadence`. K11 (a legacy PRD target) specifies p99 ≤ 100 ms at a 60 Hz rate; at the S0 cadence of 1 Hz it is approximately one second. Freshness is therefore a property of the cadence rather than of a package. Meeting K11 exactly would require an egress rate of at least 10 Hz, multiplying egress and compute by ten without changing the ranking.
 
 **Note on circular anchors.** PRD K1 is consistent with 1 Hz × 3 metrics at 100k devices, but the PRD is the artefact under evaluation; it is not used as an external anchor. Table 3.1's c = 3 and Table 3.3's client class are likewise project assumptions, labelled as such.
 
@@ -180,7 +183,7 @@ A mid-size industrial site: approximately 10,000 devices (≈30,000 tags), three
 
 ### 3.2 Anchored variants
 
-Each variant changes one answer-shaping axis to a value with an external anchor, or states the missing anchor where none exists.
+Each variant changes one or more answer-shaping axes to a value with an external anchor, or states the missing anchor where none exists.
 
 | Variant | Change from S0 | Anchor / status | What it tests |
 | --- | --- | --- | --- |
@@ -188,8 +191,11 @@ Each variant changes one answer-shaping axis to a value with an external anchor,
 | S2 — Thin client | Client with a hard memory/CPU bound | **To be anchored**; candidate classes include embedded HMI, kiosk, low-end panel (§112), but none is sourced | The cut's client-memory claim; under K3, the hard bound with server-authoritative relevance is the constraint |
 | S3 — High fan-out | V = 100, r = 10 Hz | Plant tens of operators; process 1–10 Hz (§74) | Whether server CPU becomes the wall |
 | S4 — Scattered metered | Many clients on metered links, no shared point of presence | Cloud egress pricing (§14); no relay amortisation (§17); scatter **not yet anchored** (candidate: fleet/maritime, §42 #3) | Whether per-client bounding beats relay and broadcast |
+| S5 — Sub-250 ms server-to-client | p99 < 250 ms from server data availability (ingress) to client receipt, including the tick wait and excluding the device path; r = 4 Hz; egress 10 Hz, decoupled from r | **Assumed requirement; no external anchor.** The cadence is derived: a 100 ms period leaves 150 ms for the selection/transport path; r = 4 Hz is a pairing choice | Whether a tighter latency bound changes the feasible set or the ranking; the selection-path overhead becomes 20–80% of the budget |
 
 **Note on S3.** Because egress cadence is tied to r (Table 3.2), S3 raises every package's egress by 10×; the `N/B` ratio and the ranking are unchanged.
+
+**Note on S5.** The p99 bound is a cadence requirement, not a package property: `period + selection/transport overhead < 250 ms`. At a uniform 10 Hz, D1/D3/D5/D6 meet it; D2f/D2c sit at the 250 ms boundary; D4 fails at its 200 ms worst case. A per-package cadence lets D4 meet it at ~20 Hz (25 Hz with margin), which is 2–2.5× the uniform 10 Hz cadence and ~3× the ~6 Hz minimum at which D1/D6 could meet the bound. Because p99 is measured from server data availability, r = 4 Hz is a freshness pairing, not part of the bound; if it were measured from the device sample, the sampling wait (~1/r) and the device path would be added. Relative to S0, r = 4 Hz raises the changed-value payload by ~4×; the 10 Hz cadence adds per-tick header and bitmap overhead. Server CPU is unchanged on the cut and rises on encode/send; the `N/B` ratio is unchanged, so the egress ranking is unchanged but absolute egress rises.
 
 ### 3.3 Binding test
 
@@ -202,6 +208,7 @@ A mechanism's benefit is meaningful only when exercised at the operating point (
 | S2 | Same | Yes | Yes, by definition | Maybe |
 | S3 | Same | Yes | No | Not at V = 100; ~1/3 of a model wall (~235–570 viewers, unmeasured) at 60 Hz |
 | S4 | Same | Yes | No | No |
+| S5 | Same | Yes; cadence 10 Hz and r 4 Hz | No | Maybe; encode at 10 Hz, cut unchanged |
 
 The base scenario has no mechanism that binds hard. That is the central analytical point: at the S0 operating point, the engine's guarantees are tail value, valuable only if the cap is required.
 
@@ -361,29 +368,21 @@ Not every combination of the options in §4 exists.
 
 Assumptions: f32 values, m = 3, c = 3, G = 180, p = 0.5 assumed, 1 Hz egress. Set sizes: D1 broadcasts the full 30,540-value state (30,000 device values plus 540 group-channel values) as a p = 0.5 delta; D2f/D3/D4 serve the B = 2,000 frontier; D2c serves a ~2,750-device region as a full f32 state (~33 KB/s); D6 serves the benchmark room (~625 devices) as a p = 0.5 delta (~3.75 KB + overhead ≈ 4 KB/s). Costs are rates per §2.2; a continuous month is 730 h. Build hours are marginal over a shared substrate of state table, topology, simulator, manifest, and client (~100 h). All entries are derived or assumed at S0; none are measured.
 
-**Dominance set.** D6 serves an explicitly named subtree, so it is outside the S0 dominance set: it is the baseline for the guided-view case, not a free-camera package. D1–D5 meet the S0 consumer profile, but only D3 and D4 meet K3; D1, D2f, D2c and D5 are reference designs that price the constraint. The K3-feasible comparison follows the unconstrained table.
+**Dominance set.** D6 serves an explicitly named subtree, so it is outside the S0 dominance set: it is the baseline for the guided-view case, not a free-camera package. D1–D5 meet the S0 consumer profile; D1, D2f, D2c and D5 do not meet K3 and are retained as reference designs. The K3-feasible comparison follows the unconstrained table.
 
-| Package | Egress per client (scope) | Egress $/hour | Server CPU (unmeasured) | Client CPU (ms/frame) | Client memory | p99 latency (ms) | Bound (K3) | Consistency | Build (h, marginal) |
+| Package | Egress per client (scope) | Egress $/hour | Server CPU (unmeasured) | Client CPU (ms/frame; model) | Client memory | p99 latency (ms; model) | Bound (K3) | Consistency | Build (h, marginal) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | D1 | site-wide; 65 KB/s | 0.021 | fanout only | ~0.5–2 | ~4 MB | ~1,020–1,080 | None | Yes | ~10 |
-| D2f | frontier (B = 2,000); 13 KB/s | 0.0042 | routing | ~0.3–1 | ~4 MB + frontier (~0.1 MB) | ~1,050–1,150 | Soft | Yes, with keyframe | ~20 |
-| D2c | region (~2,750 devices); 33 KB/s | 0.011 | routing | ~0.5–2 | ~4 MB + region (~0.1–0.2 MB) | ~1,050–1,150 | Soft | Yes (full region state) | ~15 |
+| D2f | frontier (B = 2,000); 13 KB/s | 0.0042 | routing | ~0.3–1.2 | ~4 MB + frontier (~0.1 MB) | ~1,050–1,150 | Soft | Yes, with keyframe | ~20 |
+| D2c | region (~2,750 devices); 33 KB/s | 0.011 | routing | ~0.2–0.8 | ~4 MB + region (~0.1–0.2 MB) | ~1,050–1,150 | Soft | Yes (full region state) | ~15 |
 | D3 | frontier (B = 2,000); 13 KB/s | 0.0042 | cut+encode; model 0.014–0.034 core/viewer at 60 Hz | ~0.1–0.3 | ~4 MB | ~1,020–1,100 | Hard | Yes | ~70 |
 | D4 | frontier (B = 2,000); 13 KB/s | 0.0042 | cut+encode; model 0.014–0.034 core/viewer at 60 Hz | ~0.1–0.3 | ~0.05–0.1 MB descriptors; ~0.1–0.4 MB total | ~1,050–1,200 | Hard | Yes | ~85 |
 | D5 | site-wide; 65 KB/s divided by k | 0.021 divided by k | fanout only | ~0.5–2 | ~4 MB | ~1,030–1,100 | None | Yes | ~20 |
-| D6 | room (~625 devices); 4 KB/s | 0.0013 | routing | ~0.1–0.5 | ~4 MB + subtree (~0.02–0.04 MB); ~0.02–0.04 MB with lazy manifest | ~1,020–1,080 | Soft unless capped | Yes | ~10 |
+| D6 | room (~625 devices); 4 KB/s | 0.0013 | routing | ~0.05–0.15 | ~4 MB + subtree (~0.02–0.04 MB); ~0.02–0.04 MB with lazy manifest | ~1,020–1,080 | Soft unless capped | Yes | ~10 |
 
-**Labels for the new columns.** Server CPU is **unmeasured**; the per-viewer basis is defined in §4.1, and the cut+encode range is a model hypothesis, not a result. Client CPU and p99 latency are also assumed order-of-magnitude ranges, not measurements; they complete the §2.2 vector and are swept. At S0, latency is dominated by the 1 Hz egress cadence (Table 3.2), so the ranges overlap and do not change the ranking; the ~1 s p99 follows from the cadence, not from package latency. D6's lower figures reflect its narrower delivered set, not a free-camera capability. Client memory for the D2c and D6 scopes is descriptors plus values on the §4.8 per-entry basis; D4's total includes the client runtime. Egress uses the base-case 1.5-slot average; Appendix B gives ~14 KB/s for the frontier and ~16 KB/s for the records under independent per-slot `p = 0.5`, with the ranking unchanged.
+**Reading the table.** Egress is derived; server CPU is unmeasured; client CPU and p99 are model outputs, not measurements. Rows are per client; build hours are marginal over the shared substrate. Client memory for the D2c and D6 scopes is descriptors plus values on the §4.8 per-entry basis; D4's total includes the client runtime. The p99 ranges overlap and do not change the ranking; the client CPU ranges differ systematically but are not a dominance metric. Their bases follow the comparison.
 
-**D2c's build cost.** D2c avoids the shared cut crate (no WASM frontier cut), so its marginal build is ~15 h rather than D2f's ~20 h; that is its surviving trade against D2f.
-
-**Scope sizes.** D2c's region (~2,750 devices) and D6's room (~625 devices) are assumed scopes, not anchored ones; their egress scales with the selected subtree.
-
-**Egress scope and transport.** The scope column states the set size: D1/D5 site-wide, D2f/D3/D4 frontier, D2c region, D6 room. Figures are batched delta at p = 0.5 unless stated; snapshot alternatives at S0 are ~122 KB/s for full state, ~26 KB/s for the frontier, and ~7.5 KB/s for the room. At the same room, a geometric server cut is expected to be ≤ D6 (culling and blending; assumed), unless it duplicates aggregate and raw data or carries a large guard band.
-
-**Manifest egress is a connection cost, not a per-tick rate.** Table 5.3 excludes it. A full JSON manifest is ~4 MB at 10k devices and ~40 MB at 100k (derived from the manifest footprint in §4.8; format-dependent). At S0's 13 KB/s frontier, that equals ~5 min of frontier egress at 10k and ~51 min at 100k; over an 8 h session it amortises to ~0.14 KB/s and ~1.4 KB/s. It matters for short or intermittent sessions and at 100k, and is reduced by a compact binary format, client cache/versioning, and a lazy manifest. It is reported separately: it does not change the per-tick ranking, but it can dominate a short session and must not be hidden.
-
-The egress ratio is approximately `N/B`, not a bandwidth saving. Broadcast sends the whole state; the cut sends the frontier. Both scale with the changed fraction, so the ratio cancels `p` and `r`:
+**Egress ratio.** The ratio is approximately `N/B`, not a bandwidth saving. Broadcast sends the whole state; the cut sends the frontier. Both scale with the changed fraction, so the ratio cancels `p` and `r`:
 
 ```
 D1 / D3 ≈ (N × m) / (B × m) = N / B
@@ -391,15 +390,48 @@ D1 / D3 ≈ (N × m) / (B × m) = N / B
 
 The approximation ignores the 540 group-channel values and the bitmap/mask overheads; the printed 65 and 13 KB/s include them, so the ratio is approximately 5×, not exactly (about 20× at 100,000/5,000). The lever is B, and B is a perceptual cap, not a physical one.
 
+**Egress scope and transport.** Figures are batched delta at `p = 0.5` unless stated; snapshot alternatives at S0 are ~122 KB/s for full state, ~26 KB/s for the frontier, and ~7.5 KB/s for the room. Figures use the base-case 1.5-slot average; Appendix B gives ~14 KB/s for the frontier and ~16 KB/s for the records under independent per-slot `p = 0.5`, with the ranking unchanged. At the same room, a geometric server cut is expected to be ≤ D6 (culling and blending; assumed), unless it duplicates aggregate and raw data or carries a large guard band.
+
+**Manifest egress is a connection cost, not a per-tick rate.** Table 5.3 excludes it. A full JSON manifest is ~4 MB at 10k devices and ~40 MB at 100k (derived from §4.8; format-dependent). At S0's 13 KB/s frontier that is ~5 min of frontier-equivalent egress at 10k and ~51 min at 100k, or ~0.14 and ~1.4 KB/s over an 8 h session. It matters for short or intermittent sessions and at 100k, and is reduced by a compact binary format, client cache/versioning, and a lazy manifest. It does not change the per-tick ranking but can dominate a short session.
+
 At S0:
 
-- On egress, D2f, D3 and D4 tie at approximately $0.0042 per client-hour (about $3.1 per continuous month). D1 is 5× worse. D6 is cheapest but serves only an explicitly selected subtree.
-- On server CPU, the server cut is expected to cost more than routing; the magnitude is unmeasured. The model range is 0.014–0.034 core/viewer at 60 Hz; at 10 Hz the cut model is assumed to overlap routing, but routing is unmeasured, so this is an assumption, not a result.
-- On client memory, nothing binds: 4 MB is trivial for a laptop. D4's O(B) advantage is real but irrelevant at S0.
-- On the new columns, the ranges overlap. D1/D5 carry O(N) client culling; D2f carries the WASM cut; D2c carries client aggregation; D3/D4 draw only the delivered slice.
-- **In the reference set (without K3), no package dominates among D1–D5 on the quantified metrics.** CPU is unmeasured, so this is conditional. D6 dominates D2f on the printed metrics, but it does not meet S0's free-camera requirement; that is why the requirement is stated formally above.
+- **Egress.** D2f, D3 and D4 tie at ~$0.0042 per client-hour (~$3.1 per continuous month); D1 is 5× worse; D6 is cheapest but serves only an explicitly selected subtree.
+- **CPU and memory.** The server cut is expected to cost more than routing (0.014–0.034 core/viewer at 60 Hz; model, unmeasured). Client memory does not bind: 4 MB is trivial for a laptop, and D4’s O(B) advantage is real but irrelevant here.
+- **No dominance.** In the reference set (without K3), no package dominates among D1–D5 on the quantified metrics. CPU is unmeasured, so this is conditional. D6 dominates D2f on the printed metrics but does not meet S0’s free-camera requirement.
 
-**K3-feasible comparison (free camera, S0).** Only D3 and D4 satisfy the constraint. The reference packages are retained to price it.
+**CPU cost is not computed.** `b` and `c` are unmeasured, so per-package CPU dollars are not results. The model form is `cores ≈ (T_cut + T_encode) × selection_rate`; a microbenchmark on a fixed host is required (§3.1). Instance-hour billing and the low-V floor are in §2.2.
+
+**Client CPU basis.** The column is the p99 main-thread cost in the frame in which a data tick arrives, at the 60 Hz selection rate, excluding rendering and draw-call submission. Decode and update are charged in full in that frame; the steady-state average is lower by ~1/60 because ticks arrive at 1 Hz, but that average is not the p99. The constants are assumed for a ~3 GHz browser/WASM client: 10–30 ns per value to decode, 2–5 ns per value to update, 10–30 ns per node to frustum-test, 20–50 ns per frontier entry to push or pop, and 2–10 ns per contribution to aggregate.
+
+| Package | Work in the arrival frame | Model (ms) | Printed (ms) |
+| --- | --- | --- | --- |
+| D1 | decode 30,540 values; update; cut 10,000 nodes; push/pop 2,000; client aggregation | 0.57–1.77 | 0.5–2 |
+| D2f | decode 6,000; cut 10,000 nodes; push/pop 2,000; ×1.5–2 WASM | 0.30–1.16 | 0.3–1.2 |
+| D2c | decode 8,250; update; aggregate 25k–41k contributions; cull 2,750 | 0.18–0.78 | 0.2–0.8 |
+| D3/D4 | decode 6,000; update | 0.07–0.21 | 0.1–0.3 |
+| D5 | same as D1 | 0.57–1.77 | 0.5–2 |
+| D6 | decode 1,875; update; cull 625; push/pop 625 | 0.04–0.12 | 0.05–0.15 |
+
+D2f’s range assumes the client cut runs over the full state in WASM; a frontier-only cut falls to ~0.1–0.4 ms. D2c’s ~25k contributions assume 3 ancestors (up to ~41k at 5). The constants are assumptions; a microbenchmark on a fixed host is required before the column is used as a result. The column is for thin-client viability, not the dominance test; even the top of the D1/D5 range is ~12% of the 16.7 ms budget.
+
+**p99 latency basis.** The column is a model: `p99 ≈ 1,000 ms + overhead`. The 1,000 ms is the 1 Hz egress cadence (Table 3.2); a reading cannot be delivered before the next tick, so the cadence dominates. The overhead is allocated per package:
+
+| Package | Selection/transport path | Overhead (ms) |
+| --- | --- | --- |
+| D1 | one WAN round trip | 20–80 |
+| D2f | subscription RTT + frontier churn | 50–150 |
+| D2c | subscription RTT + region switch | 50–150 |
+| D3 | camera uplink + downlink | 20–100 |
+| D4 | camera path + lazy-manifest fetch | 50–200 |
+| D5 | WAN round trip + relay hop | 30–100 |
+| D6 | subscription RTT, steady after user action | 20–80 |
+
+The WAN round trip is 20–80 ms (Appendix C). D1 is the WAN path alone. D2f and D2c add 30–70 ms for frontier churn or region switching; D3 adds the camera path and 0–20 ms of processing and queueing; D4 adds the camera path, 0–20 ms, and a 0–100 ms lazy-manifest fetch; D5 adds a 10–20 ms relay hop; D6’s guided stream is steady after the initial user action and stays at the WAN path. D4’s lazy-manifest fetch is 0–100 ms (assumed; zero on a warm cache), so its 1,050 lower bound assumes a partially warm path; a fully warm cache reduces it to D3’s range. Server cut+encode (0.014–0.034 core/viewer at 60 Hz ≡ 0.23–0.57 ms at B = 2,000; the b/c entry sum is 0.18–0.52 ms plus framing) and client decode (0.1–0.3 ms) are below 1 ms and do not move the rounded ranges. Package differences are 20–200 ms on a 1,000 ms floor: they overlap, do not change the ranking, and are second-order at S0. K11’s legacy target of p99 ≤ 100 ms at 60 Hz is not met by any package at 1 Hz; meeting it needs at least 10 Hz egress, multiplying egress and compute by ten without changing the ranking (§3.1).
+
+**Package notes.** D2c avoids the shared cut crate (no WASM frontier cut), so its marginal build is ~15 h rather than D2f's ~20 h; that is its surviving trade against D2f. The D2c region (~2,750 devices) and D6 room (~625 devices) are assumed scopes, not anchored ones; their egress scales with the selected subtree.
+
+**K3-feasible comparison (free camera, S0).** Only D3 and D4 satisfy the constraint; the reference packages price it. K3 is self-set and unanchored, so this table is conditional; the unconstrained comparison above is the realistic baseline.
 
 | Package | Meets K3? | Egress per client | Client memory | Selection-path latency | Build (h, marginal) | Role |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -410,9 +442,7 @@ At S0:
 | D4 | **Yes** | 13 KB/s | ~0.1–0.4 MB | camera loop + cut + lazy manifest | ~85 | feasible; O(B) client |
 | D5 | No | 65 KB/s ÷ k | ~4 MB | none | ~20 | reference: relay, no bound |
 
-Within the feasible set, D4 is better on client memory and worse on build cost and selection-path latency; D3 is the reverse. Neither dominates. Against the reference, D3/D4 match D2f on egress and pay a build premium of ~50–65 h and a server-CPU premium at 60 Hz (model; unmeasured). That premium is the price of K3. D6 with a server-enforced cap meets K3 for a guided consumer, but it is outside S0 and cannot follow a free camera.
-
-**CPU cost is not computed.** `b` and `c` are unmeasured, so per-package CPU dollars are not results. The model form is `cores ≈ (T_cut + T_encode) × selection_rate`; a microbenchmark on a fixed host is required. The instance-hour caveat still applies: at low V, the smallest available instance sets a floor; above roughly V = 100, the marginal rates are more meaningful. A rented core is usually a hyperthread; if physical cores are meant, the rate doubles. Totals scale with connected hours: an 8 h/day duty cycle is one third of continuous operation, and the provider free allowance may absorb most of the remainder.
+Within the feasible set, D4 is better on client memory and worse on build cost and selection-path latency; D3 is the reverse. Neither dominates. Against the reference, D3/D4 match D2f on egress and pay a build premium of ~50–65 h and a server-CPU premium at 60 Hz (model; unmeasured). That premium is the price of a constraint the project chose; no consumer was found that imposes it. D6 with a server-enforced cap meets K3 for a guided consumer, but it is outside S0 and cannot follow a free camera.
 
 ### 5.4 Comparison under the variants
 
@@ -424,24 +454,28 @@ Within the feasible set, D4 is better on client memory and worse on build cost a
 | S2 thin client | Free camera: D4 on memory (D2f approximates O(B) at round-trip cost). Guided: D6 with a scope-limited lazy manifest and a server-enforced cap is O(subtree) and wins | Free camera: D1, D2c, D3. Guided: D1, D2c, D3, D4 | Strict O(B) memory requires server-side selection; D2f's approximation adds latency. The likely thin-client anchors (HMI, kiosk, panel) are guided views. |
 | S3 high fan-out | D2f on CPU (model; unmeasured) | D3, D4 (rising CPU, still ~1/3 of the model wall at V = 100) | Per-viewer cut cost is linear in V; routing is not |
 | S4 scattered metered | D3, D4 if the hard bound is required; otherwise D2f on cost | D1, D5 | D2f ties on egress and is cheaper to build; D3/D4 add the hard bound. A relay cannot amortise without a shared point of presence |
+| S5 sub-250 ms server-to-client | D1 on build cost, D3 on egress, D6 if guided | D4 at a uniform 10 Hz (fails at its 200 ms worst case); D2f/D2c at their worst case (borderline) | p99 is a cadence requirement; the `N/B` ratio is unchanged, but the feasible set narrows. D4 needs ~20 Hz (25 Hz with margin) to meet the bound, 2–2.5× the uniform 10 Hz cadence (~3× the ~6 Hz D1/D6 minimum) |
 
 **S2's consumer profile.** S2 is defined as a client-class change, but the thin clients one can anchor (embedded HMI, kiosk, low-end panel) are usually guided-view consumers. If S2 holds S0's free camera, D4 is the memory winner. If the anchor is a guided view, the consumer profile has changed as well, and D6 with a scope-limited lazy manifest and a server-enforced cap (where K3 applies) is O(subtree), avoids the camera loop, and is cheaper to build (~25 h = D6 ~10 h + lazy manifest ~15 h, against D4 ~85 h). The S2 result is therefore conditional on the free-camera profile.
+
+**S5's result.** At the uniform 10 Hz cadence, D1/D3/D5/D6 meet the bound; D2f/D2c sit at 250 ms in the worst case; D4 fails at 300 ms. A per-package cadence lets D4 meet it at ~20 Hz (25 Hz with margin), 2–2.5× the uniform 10 Hz cadence (~3× the ~6 Hz D1/D6 minimum), which returns the D3/D4 trade with D4's memory advantage offset by cadence cost.
 
 ### 5.5 Verdict
 
 The engine's case is conditional, and **no condition is fully anchored**.
 
 - **Under K3**, the free-camera feasible set is D3 and D4. D1, D2c, D2f and D5 do not satisfy the hard bound; they are reference packages that price the constraint. Within the feasible set, D4 adds O(B) client memory at ~15 h over D3; D3 is cheaper to build but O(N) client memory. That is a trade, not a dominance.
-- **The price of K3** is the difference between D2f and D3/D4: the same egress (~13 KB/s base case; ~14 under Appendix B), a build premium of ~50–65 h, and higher server CPU at 60 Hz (model; unmeasured). At 10 Hz the cut model is assumed to overlap routing; routing is unmeasured. This premium, not an egress saving, is what the bound buys.
-- **Without K3**, no design dominates: D2f ties D3 on egress and is expected to be cheaper on CPU; D1 wins on LAN; D6 wins for a guided consumer. The unconstrained comparison is reported because it prices the bound, not because it is the project question.
-- The hard bound is **self-set (K3)**. Exact aggregation of the unseen and a shared cross-viewer snapshot accompany it but are not unique: D2f and D6 also aggregate server-side, and a broadcast snapshot is shared. Consistency and exactness are properties of a centralised design rather than demands (§39, §64).
+- **The price of K3** is the difference between D2f and D3/D4: the same egress (~13 KB/s base case; ~14 under Appendix B), a build premium of ~50–65 h, and higher server CPU at 60 Hz (model; unmeasured). At 10 Hz the cut model is assumed to overlap routing; routing is unmeasured. This premium, not an egress saving, is what the bound buys if it is retained.
+- **Without K3**, no design dominates: D2f ties D3 on egress and is expected to be cheaper on CPU; D1 wins on LAN; D6 wins for a guided consumer. The unconstrained comparison is the realistic baseline; the constrained comparison is the conditional case.
+- The hard bound is **self-set and unanchored (K3)**. Exact aggregation of the unseen and a shared cross-viewer snapshot accompany it but are not unique: D2f and D6 also aggregate server-side, and a broadcast snapshot is shared. Consistency and exactness are properties of a centralised design rather than demands (§39, §64).
 - The demand test still fails for the conjunction. Published demand exists for aggregation, not for bounded, exact, consistent, per-consumer delivery under a live cut.
+- **On the current evidence K3 is likely not a realistic requirement**; no consumer or standard was found that imposes it. The constrained result is therefore conditional; the realistic baseline is the unconstrained comparison, where D1 wins on cost in S1, D2f ties D3 on egress, and D6 serves a guided consumer.
 
 ## 6. What the comparison shows
 
 ### 6.1 Result
 
-Under S0 the server-side cut is a bounded middle: expected to be more expensive on CPU than fine interest, less expensive on egress than broadcast, and the only package family with a hard bound. **Under K3 it is the free-camera feasible set; the comparison is then its premium over D2f (~50–65 h of build and higher 60 Hz CPU), not an egress saving.** It is not the cheapest design and is not necessary at the base scenario.
+Under S0 the server-side cut is a bounded middle: expected to be more expensive on CPU than fine interest, less expensive on egress than broadcast, and the only package family with a hard bound. **Under K3 it is the free-camera feasible set; the comparison is then its premium over D2f (~50–65 h of build and higher 60 Hz CPU), not an egress saving.** It is not the cheapest design and is not necessary at the base scenario. That result is conditional on K3; the realistic baseline is the unconstrained comparison.
 
 If the consumer instead names what it needs — a guided view, a drill-down — D6 serves it at ~4 KB/s with commodity aggregation and requires no cut. The engine's niche is therefore the free-camera case under a hard bound, or a thin client that retains the free camera; a guided thin client is served by D6 with a scope-limited lazy manifest and a server-enforced cap (where K3 applies), at ~subtree memory. It is not visualization as such: in the natural visualization deployment (S1: GPU laptops in a control room on a LAN), broadcast with a client cut is the cheapest design.
 
@@ -462,7 +496,7 @@ The engine's case appears only when a variant is anchored: a thin client with a 
 | 7 | Implementation and substrate | No effect on ranking; build cost and credibility only | §111 |
 | 8 | Encoding | No effect on ranking; absolute bytes only | Appendix B |
 
-Only three of the eight rows change the verdict: deployment, the client bound, and the consumer/selection model. The comparison is therefore a three-variable question. That is the substance of the answer.
+Only three of the eight rows change the verdict at S0: deployment, the client bound, and the consumer/selection model. A p99 bound tighter than the 1 Hz egress period is a fourth, tested as S5; it acts as a cadence requirement and can narrow the feasible set without changing the egress ratio. The comparison is therefore a three-variable question at S0, with latency as a conditional fourth.
 
 Manifest egress is a separate connection cost (§5.3): it changes absolute cost and can dominate a short session, but not the per-tick ranking.
 
@@ -472,18 +506,21 @@ Manifest egress is a separate connection cost (§5.3): it changes absolute cost 
 | --- | --- | --- |
 | Digital-twin visualization (category) | Industrial-facility twins ~$5.1B (2021) → ~$13.9B (2026), ~18% CAGR as stated by Verdantix (endpoints imply ~22%); vendor investment (Siemens Digital Twin Composer, 2026; NVIDIA Omniverse; Azure 3D Scenes Studio) | Real and growing |
 | Live, large-scale twin visualization | Documented as a technical challenge (Maiterth et al., *Visualizing an Exascale Data Center Digital Twin*, VIS 2024; telemetry-rendering bottlenecks in industry sources) | Active; addressed on the rendering side by incumbents |
-| Aggregation over a hierarchy | Eclipse Ditto #1525 (2022, open); FIWARE Orion #3816 (2021, open); tippecanoe #324 and #830; deck.gl #10795 | Real, dated demand for aggregation (Ditto, Orion); solved for shared content (tippecanoe, deck.gl) |
+| Aggregation over a hierarchy | Eclipse Ditto #1525 (2022, open); FIWARE Orion #3816 (2021, open); tippecanoe #324 and #830; deck.gl #10795 (tracker) | Real, dated demand for aggregation (Ditto, Orion); the capability exists for shared content (tippecanoe, deck.gl) |
 | Per-consumer selection | Mirror #3197; interest management | Solved |
+| Hard per-client entry bound (K3) | No standard, deployment requirement, or consumer found; self-set (2026-10-19) | Unanchored; likely not a real constraint |
 | Bounded, per-consumer telemetry delivery under a live cut (the conjunction) | None found | Unrequested |
 
-A universal gap is evidence of absent demand more often than of unmet need. The demand is for aggregation, not for the coupling. Market figures are vendor-produced and vary widely — roughly $10–40B for 2026 across reports — so they indicate a growing category, not a specific mechanism; the category is served by client-side rendering in the incumbent platforms, and the delivery mechanism studied here remains unrequested.
+A universal gap is evidence of absent demand more often than of unmet need. The demand is for aggregation, not for the coupling. The absence of any published hard bound is weak evidence, consistent with K3 not being a deployment requirement. Market figures are vendor-produced and vary widely — roughly $10–40B for 2026 across reports — so they indicate a growing category, not a specific mechanism; the category is served by client-side rendering in the incumbent platforms, and the delivery mechanism studied here remains unrequested.
 
 ### 6.4 What would change the verdict
 
 | Unknown | If resolved as | Consequence |
 | --- | --- | --- |
 | A thin-client class with a hard bound | An embedded HMI or kiosk with a small metadata budget | D4's memory claim becomes anchored **only if the thin client retains the free camera**; a guided kiosk is served by D6 with a scope-limited lazy manifest (O(subtree)) and a server-enforced cap where K3 applies, and D2f remains a trade at round-trip and extra-egress cost |
-| The hard bound is sourced | A standard or deployment requirement rather than K3 | The constraint moves from self-set to sourced; the feasible set and the premium are unchanged |
+| K3 is dropped | No hard bound is imposed; the unconstrained comparison applies | The feasible set widens; D2f ties D3 on egress and is cheaper, D1 wins on LAN, D6 serves guided; the cut is a premium without a constraint |
+| The hard bound is sourced | A standard or deployment requirement rather than K3 (no candidate source found) | The constraint moves from self-set to sourced; the feasible set and the premium are unchanged |
+| A p99 bound tighter than the 1 Hz egress period | 250 ms from server availability to client receipt with r = 4 Hz and egress = 10 Hz | The cadence rises; the egress ratio `N/B` is unchanged; the feasible set narrows (D4 fails at 10 Hz, D2f/D2c borderline); D4 needs ~20 Hz (25 Hz with margin) to meet it |
 | Demand for the conjunction | A published complaint or a standard | The justification strengthens |
 | Selection rate and camera motion | 10 Hz slow pan rather than 60 Hz free camera | The model's CPU gap narrows; the CPU comparison is unmeasured |
 | Measured constants b, c, p | Any values | Converts estimates into results; does not change the ranking |
@@ -498,8 +535,10 @@ A universal gap is evidence of absent demand more often than of unmet need. The 
 - The comparison assumes the hierarchy is spatial and immutable at boot.
 - Build estimates are planning figures, not measured effort.
 - Manifest egress is format-dependent and is reported as a separate connection cost, not in the per-tick model.
-- CPU is unmeasured; `b` and `c` are assumptions, and TDD/PRD budgets are design targets, not measurements.
+- Server CPU is unmeasured; `b` and `c` are assumptions, and TDD/PRD budgets are design targets, not measurements. Client CPU is a model output from assumed per-entry constants, not a measurement.
+- p99 latency is a model output from the 1 Hz egress cadence plus 20–200 ms of selection and transport overhead; it is not a measurement, and the package differences are second-order at S0.
 - The S0 consumer profile is assumed, not anchored; the free camera is the engine's niche case, not the modal consumer.
+- K3 is self-set and unanchored; no consumer or standard was found that imposes a hard entry bound. The K3-feasible comparison is therefore illustrative, not a result about a real deployment.
 - D2f's O(B) approach is a coarse-top lazy descent with a round-trip cost, not strict O(B) memory.
 - B1, the composition baseline, is not quantified in Table 5.3; ANL-001 contrasts functions, not costs.
 
@@ -511,18 +550,18 @@ The functionality contrast, the framework/library landscape, and the channel-con
 
 | Path | Description | Requirements | Cost | Risk |
 | --- | --- | --- | --- | --- |
-| A — Keep and narrow | Retain the engine, scope it to S2 or S4 | An anchored thin-client class (S2) **that retains the free camera**, or scatter (S4); K3 is adopted as a self-set constraint (decision, 2026-10-19); evaluate D4 against D2f (coarse-top lazy descent, with its round-trip cost) and D1 | ~200 h | Demand unproven; if the composition passes, the dissertation is a build report |
+| A — Keep and narrow | Retain the engine, scope it to S2 or S4 | An anchored thin-client class (S2) **that retains the free camera**, or scatter (S4); K3 is adopted as a self-set constraint (decision, 2026-10-19) but is not itself an anchor; evaluate D4 against D2f (coarse-top lazy descent, with its round-trip cost) and D1 | ~200 h | Demand unproven; K3 unanchored; if the composition passes, the dissertation is a build report |
 | B — Comparison as contribution | Make the characterisation the contribution, with one reference implementation of the preferred package | The comparison, one implementation, anchored variants | ~150–180 h | Not novel; admissible for system-development, weak as a research claim |
 | C — Change topic | Use the comparison as rationale and related work; move to an existing faculty research line or the disclosure direction | A named and reachable anchor | ~120–160 h | Starting over; the analysis transfers |
 
-Path A is the only path on which the engine survives, and it depends on a scenario anchor that does not yet exist. Path B answers the question and preserves the work. Path C is the honest move if neither the bound nor the demand can be anchored.
+Path A is the only path on which the engine survives, and it depends on a scenario anchor that does not yet exist; K3 does not supply that anchor. Path B answers the question and preserves the work without requiring K3 to be realistic. Path C is the honest move if neither the bound nor the demand can be anchored.
 
 ## 8. Open questions
 
 1. Is a K3-constrained design, anchored only in a thin-client or metered scenario, sufficient for a COMP4299 system-development project?
 2. If the comparison shows no unconditional advantage, is Path B (comparison as contribution) or Path C (change topic) preferred?
 3. What client class would be accepted as thin and hard-bounded for S2, and is it a free-camera or a guided-view consumer?
-4. K3 is adopted as a self-set constraint (decision, 2026-10-19). The remaining question is procedural: is a self-set bound acceptable to the supervisor as the project's stated requirement, or must it be sourced from a standard or deployment?
+4. K3 is adopted as a self-set constraint (decision, 2026-10-19), but no consumer or standard was found that imposes it; on the current evidence it is likely not a realistic requirement. The remaining question is procedural: is a self-set bound acceptable to the supervisor as the project's stated requirement, or should it be dropped and the comparison run unconstrained?
 5. Which line has data or hardware available this term?
 6. Should any design that touches a model be assessed under COMP4299 or CSAI4299?
 7. Are the expected deliverables a dissertation only, or also a demo and benchmarks?
@@ -533,14 +572,14 @@ Path A is the only path on which the engine survives, and it depends on a scenar
 
 | Competitor | Issue | Age and state | What it shows |
 | --- | --- | --- | --- |
-| Eclipse Ditto | #1525 | 2022, open | Dated demand for aggregation over a fleet |
-| FIWARE Orion | #3816 | 2021, open | Same shape; workaround is client-side aggregation |
-| Mapbox tippecanoe | #324, #830 | 2016–2020 | Aggregation coupled to LOD exists, precomputed and shared |
-| deck.gl | #10795 | 2026, open | View-dependent aggregation is solved (collaborator tracker, not user demand) |
-| Cesium | #6182 | 2018, closed | User-built workaround; redirected to tile pipelines |
-| Mirror | #3197 | 2022, closed | Per-consumer selection is solved |
+| Eclipse Ditto | [#1525](https://github.com/eclipse-ditto/ditto/issues/1525) | 2022, open | Dated demand for aggregation over a fleet; requests mean temperature over thousands of things via the search API. |
+| FIWARE Orion | [#3816](https://github.com/telefonicaid/fiware-orion/issues/3816) | 2021, open | Same shape: an aggregation operations API (count/avg) requested; open since 2021. |
+| Mapbox tippecanoe | [#324](https://github.com/mapbox/tippecanoe/issues/324), [#830](https://github.com/mapbox/tippecanoe/issues/830) | 2016–2020, closed | Aggregation is built into the tile pipeline (`--accumulate-attribute`); the issues are a feature request and a mean-accumulation bug, not live per-consumer aggregation. |
+| deck.gl | [#10795](https://github.com/visgl/deck.gl/issues/10795) | 2026, open | Zoom-dependent LOD/aggregation is achievable with existing props; the issue is a documentation tracker, not user demand. |
+| Cesium | [#6182](https://github.com/CesiumGS/cesium/issues/6182) | 2018–2019, closed | Vector-tile/LOD aggregation request; the user built an MVT workaround; closed as completed. |
+| Mirror | [#3197](https://github.com/MirrorNetworking/Mirror/issues/3197) | 2022, closed | Per-observer SyncVar visibility was requested and completed; per-consumer selection exists. |
 
-Method caveat: a sample, not an exhaustive search; absence of a request is weak evidence.
+Method caveat: a sample, not an exhaustive search; absence of a request is weak evidence. Links and states verified 2026-10-20 against the GitHub API.
 
 ## Appendix B — Dynamic-set encoding, worked
 

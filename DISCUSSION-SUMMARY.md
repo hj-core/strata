@@ -3,14 +3,14 @@
 | Field | Value |
 | --- | --- |
 | Document | DISCUSSION-SUMMARY |
-| Date | 2026-10-20 (ten sessions: 2026-10-12 → 2026-10-20) |
+| Date | 2026-10-20 (eleven sessions: 2026-10-12 → 2026-10-20) |
 | Subject | Review of a proposed FYP: server-side spatial filtering engine for 3D digital-twin visualization |
-| Artifacts reviewed | `docs/DEC-001`, `docs/ANL-001`, `docs/PRD-001`, `docs/TDD-001`, `docs/PLN-001` |
-| Participants | Supervisor (critic) and student (author); later a viva-style exchange; Part X is a document-correctness working session |
+| Artifacts reviewed | `docs/DEC-001`, `docs/ANL-001`, `docs/PRD-001`, `docs/TDD-001`, `docs/PLN-001`; Part XI adds three external sources |
+| Participants | Supervisor (critic) and student (author); later a viva-style exchange; Part X is a document-correctness working session; Part XI is a BUILD-agent analysis session |
 
-**Purpose.** A resumable record of the review. Section numbers are stable and are cited by `DEC-001` and the build handover. Unless labelled otherwise, figures in Parts I–VIII are first-principles estimates against stated constants, not measurements; Part IX adds cited literature; Part X records the DEC-001/ANL-001 correctness pass, and its figures are derived or assumed.
+**Purpose.** A resumable record of the review. Section numbers are stable and are cited by `DEC-001` and the build handover. Unless labelled otherwise, figures in Parts I–VIII are first-principles estimates against stated constants, not measurements; Part IX adds cited literature; Part X records the DEC-001/ANL-001 correctness pass, and its figures are derived or assumed. Part XI continues the DEC-001/ANL-001 analysis — Materialize, the client CPU and p99 model bases, the K3 lean, S5 — and records the Appendix A verification.
 
-**Editorial note.** Condensed 2026-10-19: repeated restatements and superseded status sections were collapsed; all 141 section numbers and the evidence tables are retained. Part X (2026-10-20) adds §142–§150 without renumbering earlier sections. The pre-condensation text remains in git history.
+**Editorial note.** Condensed 2026-10-19: repeated restatements and superseded status sections were collapsed; all 141 section numbers and the evidence tables are retained. Part X (2026-10-20) adds §142–§150; Part XI (2026-10-20) adds §151–§162, without renumbering earlier sections. The pre-condensation text remains in git history.
 
 | Part | Sections | Session | Focus |
 | --- | --- | --- | --- |
@@ -24,6 +24,7 @@
 | VIII | §99–§116 | 10-17 | Track closure, competitor hunt, design space |
 | IX | §117–§141 | 10-17→19 | Defensibility, disclosure, supervisor fit, trust |
 | X | §142–§150 | 10-20 | DEC-001 correctness, ANL-001, bitmask, SQL/Rust, review |
+| XI | §151–§162 | 10-20 | Materialize, client CPU/p99 models, K3 lean, S5, Appendix A |
 
 ---
 
@@ -1478,3 +1479,119 @@ Verification pass: all fixes pass; ready for the supervisor. Review session: `se
 - **Bitmask:** candidate requirement; per-device mask (10k bits, 1.25 KB); raw vs aggregate; per-mask classes; exactness caveat; not privacy.
 - **Supervisor meeting:** still the gate. No build. No commit.
 - **Next:** the supervisor questions (K3 acceptance, S2/free camera, S4 scatter, module fit, deliverables). If the bitmask is pursued, run the failing-baseline SQL benchmark at V = 10/100 and 1/60 Hz, with sum/mean/min/max/attention and exactness; if the cut/policy is pursued, name the anchor. The analysis remains the asset.
+
+---
+
+# Part XI — Materialize, model bases, K3, and S5 (eleventh session)
+
+Part XI records the 2026-10-20 continuation. It is not a supervisor meeting. It resumes the ANL-001 discussion against Materialize, then reworks DEC-001's client CPU and p99 columns, adopts a firmer K3 lean, adds S5, verifies Appendix A, and records two review audits.
+
+## 151. Orientation
+
+The session began with "is the engine competing with Materialize?" and ended with a DEC-001 audit and fix pass. Settled inputs: COMP4299 system-development; the cut's demand unproven; the analysis is the asset; the supervisor meeting remains the gate. No build.
+
+Documents: DEC-001 v0.4.0 (last updated 2026-10-20); ANL-001 v0.2.0. The review line moved to a child session (`ses_ea8261124ffewIT7wHmP4QtF15`) because the original (`ses_ea8c8529fffePn16RPUCljzDgc`) is not resumable from the BUILD session.
+
+## 152. Materialize as the aggregation baseline
+
+Materialize is the closest packaged IVM implementation: streaming SQL over sources, maintained views, `SUBSCRIBE`, strict serializable by default. It supports `real`/`float4` and `double precision`/`float8`.
+
+The decisive detail is arithmetic. To support retractions, `sum` and `avg` over floats are accumulated in fixed point at 2⁻²⁴; each input is truncated toward zero; values below 2⁻²⁴ contribute 0; results are incorrect past ~2¹⁰³. `min`/`max` return exact inputs; `count` is exact; `numeric` is exact but a different type. The result is deterministic and order-independent, but not IEEE f32. The engine recomputes per frame in a fixed blocked-lane order, so it keeps f32. **Invertibility costs precision.**
+
+The benchmark trap: a query evaluated entirely at planning time over a `VALUES` list uses ordinary float addition; a query through a source or MV uses the fixed-point path. Test through the dataflow.
+
+## 153. The head-to-head
+
+Configured to the engine's contract — `ENVELOPE UPSERT` keyed by `(device, metric)`, 1 s history (private preview), a temporal freshness filter, mask-class views, `SUBSCRIBE` — Materialize matches the simple rollup, the channel wiring, and the shared snapshot. It cannot match f32 parity; it expresses availability and masks at a cost; it wins on build cost, generality, durability, temporal/history, and operational maturity.
+
+The engine wins on f32 parity (conditional on an oracle-parity requirement), recompute determinism, flat/bounded memory, boot-time invariants, and tail latency (hypothesis). The residual is narrow.
+
+The shared snapshot is a contract property, not a differentiator: a shared MV plus `SUBSCRIBE` gives the same consistency, arguably stronger linearizability. The fair baseline is the shared view, not a per-viewer pull query.
+
+Memory: with current-state Materialize both sides hold O(N·m); the gap is fixed database overhead plus arrangements, not an order of magnitude. The structural gap appears only in the arbitrary-mask regime: an M×E join state versus cover-plus-exceptions per consumer.
+
+Delivery is excluded from ANL-001 §8. It is kept as a separate comparison with its own baselines — 3D Tiles/Cesium (`skipLevelOfDetail`), Potree, OSG/osgEarth `PagedLOD`, deck.gl, and interest management (SpatialOS, Photon, Mirror, FishNet, Unity NGO). Comparing the cut to Materialize is a category error.
+
+## 154. Persistence and history
+
+Materialize is not a general OLTP database: read-write tables exist, but there are no primary keys, unique constraints, or check constraints; strict serializable is the default; writes are not the design centre. It is not a history store: it keeps current state and the arrangements for IVM; the upstream log or TSDB holds history. `RETAIN HISTORY` is a private-preview durable-subscription feature, not temporal tables; there is no general user-facing time travel.
+
+Temporal aggregation works through `mz_now()` temporal filters and `date_bin`: sliding windows, tumbling windows, TTL, late data with a grace period. It is event-time/retained-history work. The engine has no history (TDD §5.1), so temporal aggregation is outside its contract.
+
+Both stacks need a persistent layer if history, audit, replay, or restart continuity is required. The engine's requirement is optional and tiny (configuration plus a state snapshot); Materialize's is structural (durable input, object store, consensus if self-managed). In a real plant the persistent layer already exists; the comparison should assume it as shared infrastructure.
+
+## 155. The one-parent constraint
+
+The tree is a domain assumption, not a capability. The engine assumes one root, one parent per non-root node, devices as leaves, and channel fan-in/fan-out only within the unique parent edge. Materialize is topology-agnostic: a tree is a `parent_id`/closure table, a DAG a recursive CTE.
+
+The tree buys the engine contiguous subtrees, `skip_index = index + subtree_size`, `first_child = index + 1`, `next_sibling = sibling + subtree_size`, a unique path per leaf, an unambiguous contribution set, and a byte-stable preorder manifest. Materialize gets no exclusive capability, but the tree makes its recursion terminate and its closure acyclic.
+
+Removing the constraint breaks the contiguous layout and the skip index: no single linearisation makes every subtree contiguous. The replacement is CSR adjacency, a topological order, a dedup stamp for the cut, per-edge merge lists, and a boot-time reachability dedup. The skip index survives only for closed subtrees or by unfolding the DAG into a tree, at the cost of node identity and entry count. K3 accounting changes. The one-parent rule is a legacy design assumption, not an engine advantage; if the real domain is multi-parent, Materialize is the more general choice.
+
+## 156. Client CPU and p99 as models
+
+The client CPU column is now a model, not an assumed range. It is the p99 main-thread cost in the frame in which a data tick arrives, at the 60 Hz selection rate, excluding rendering. Decode/update are charged in full; the ~1/60 steady-state average is not the p99. Constants: 10–30 ns per value decode, 2–5 ns per value update, 10–30 ns per node frustum, 20–50 ns per frontier entry push/pop, 2–10 ns per contribution aggregate.
+
+The per-package table gives D1 0.57–1.77, D2f 0.30–1.16 (×1.5–2 WASM), D2c 0.18–0.78, D3/D4 0.07–0.21, D5 0.57–1.77, D6 0.04–0.12. D2c's printed range widened to 0.2–0.8; D6's 0.05–0.15 includes cull/push-pop; D2f's 0.3–1.2 assumes a full-state WASM cut, with 0.1–0.4 for a frontier-only cut.
+
+The p99 column is `p99 ≈ 1,000 ms + overhead`: the 1 Hz cadence dominates; the per-package overhead is D1 20–80, D2f/D2c 50–150, D3 20–100, D4 50–200, D5 30–100, D6 20–80. D4's 1,050 lower bound assumes a partially warm manifest; a warm cache reduces it to D3's range. The b/c entry sum (0.18–0.52 ms) plus framing reconciles the 0.23–0.57 ms cut+encode figure.
+
+The audit found the first draft of these notes contradictory: the client CPU basis mixed a p99 frame with a 1/60 amortised average and per-entry constants with per-value scopes; the S5 label said "from server egress" while the arithmetic used the tick wait. Both are fixed.
+
+## 157. K3: self-set, unanchored, likely not realistic
+
+The session adopted a firmer lean: K3 is self-set (decision, 2026-10-19), has no external anchor, and no consumer or standard was found that imposes it. On the current evidence it is likely not a realistic requirement. The unconstrained comparison is the realistic baseline; the K3-feasible comparison is conditional.
+
+The document now says this in §1.2, §1.3, §1.4, §2.2, §2.3, §5.3, §5.5, §6.1, §6.3, §6.4, §6.5, §7, and §8. The demand table gained a row: hard per-client entry bound, no standard/deployment/consumer found, self-set, unanchored. §6.4 gained "K3 is dropped"; Path A now says K3 is not itself an anchor and needs an independent scenario anchor.
+
+The lean is a judgement, not a sourced fact; it is hedged as "on the current evidence". The constrained comparison is still given a full hearing (the K3-feasible table and §5.5).
+
+## 158. S5: p99 < 250 ms server-to-client
+
+S5 adds a latency variant: p99 < 250 ms from server data availability (ingress) to client receipt, including the tick wait and excluding the device path; read rate 4 Hz; egress 10 Hz, decoupled from `r`. The requirement is assumed, not anchored; the cadence is derived (100 ms period leaves 150 ms for the selection/transport path).
+
+At uniform 10 Hz: D1 120–180, D3 120–200, D5 130–200, D6 120–180 pass; D2f/D2c 150–250 sit at the boundary; D4 150–300 fails at its 200 ms worst case. A per-package cadence lets D4 meet the bound at ~20 Hz (25 Hz with margin), 2–2.5× the uniform 10 Hz and ~3× the ~6 Hz D1/D6 minimum.
+
+The p99 bound is a cadence requirement, not a package property. It changes the feasible set, not the egress ratio: `N/B` is unchanged. `r = 4 Hz` raises the changed-value payload ~4×; the 10 Hz cadence adds per-tick headers/bitmaps; the server cut is unchanged, encode/send rises. Under K3 at 10 Hz, the feasible set collapses from {D3, D4} to {D3}; at 20–25 Hz D4 returns, with its memory advantage offset by cadence cost.
+
+The §3.2, §3.3, §5.4, §6.2, and §6.4 entries are consistent. The session did not add S5 to the supervisor question set; the requirement is hypothetical until anchored.
+
+## 159. Appendix A verification
+
+Appendix A was checked against the GitHub API on 2026-10-20. One link was broken: `FIWARE/orion#3816` returns 404; the canonical repository is `telefonicaid/fiware-orion`.
+
+Corrections:
+
+- **Ditto #1525** (2022, open): "Provide 'aggregation' functions in Ditto search"; mean temperature over thousands of things. Correct as dated demand.
+- **Orion #3816** (2021, open): "Aggregation operations API"; count/avg requested. The old "client-side workaround" claim was removed; the issue does not support it.
+- **tippecanoe #324/#830** (closed 2017/2020): #324 requested feature aggregation; #830 is a mean-accumulation bug. Aggregation is in the tile pipeline (`--accumulate-attribute`), precomputed and shared.
+- **deck.gl #10795** (2026, open): "Tracker: Zoom-dependent layers"; a documentation/examples tracker, not user demand. "Solved" was too strong; the table now says the capability is achievable with existing props.
+- **Cesium #6182** (2018–2019, closed): vector-tile/LOD aggregation request; user-built MVT workaround; closed completed.
+- **Mirror #3197** (2022, closed): "Send Syncvars to subset of observers"; closed completed. Corrected to per-observer SyncVar visibility, not the broader "per-consumer selection is solved."
+
+The §6.3 demand table was aligned: deck.gl is marked a tracker; the capability exists for shared content but is not user demand.
+
+## 160. External sources
+
+Three sources were read for the latency/consistency question.
+
+- **Uehara & Kasamatsu (ITC-CSCC 2025)**, "A Method of Consistency Control Based on Latency for Digital Twin Systems" (DOI 10.1109/ITC-CSCC66376.2025.11137613). It adapts the transmission interval to latency: increasing the interval reduces latency but degrades consistency; when latency exceeds a threshold, the interval is increased by the square root of latency; the experiment suppresses latency from ~250 s to ~3 s. It supports the latency-consistency trade and cadence as a control knob, but its latency is processing/queueing latency, not freshness, and the scale is far from S0. It raises a tension: per-client adaptive cadence conflicts with the shared frame snapshot.
+- **Rinaldi, Dello Iacono, Bellagente & Pasetti (PDP 2025)**, "Analysis of Time Synchronization Challenges in Digital Twins for Edge-Enabled Data Centers in Smart Cities Scenario" (DOI 10.1109/PDP66500.2025.00078). Clock drift, network jitter, and protocol constraints cause temporal inconsistencies. It supports the clock-origin definition in S5 and the document's consistency/jitter concerns; a shared frame is only as good as the clock discipline behind it.
+- **Anvil Labs (2026-03-02)**, "Reducing Latency in Drone Digital Twin Models." Vendor content: edge computing, hybrid cloud-edge, LoD, delta syncing, semantic compression, priority-based transmission, MQTT/MAVLink. The numbers (300 ms edge saving; 35→12 ms; 0.87→0.6 s) are secondary and method-free; they are industry context, not anchors. The post's "end-to-end" includes collection, processing, and visualization, which is why DEC's server-to-client definition must state its boundary.
+
+## 161. Review audits
+
+**ANL-001 §8 (new material).** A fresh review found 0 critical, 3 high, 6 medium, 7 low. H1: summary vs §8 on the shared snapshot; H2: §8.6 narrowed the shared-cost claim but §5/§10/§11 still sold it; H3: the tree was called "sourced" after PRD/TDD lost authority. M1–M6: §3 arithmetic, `RETAIN HISTORY` labels, cover cost for min/max, "strawman" per-consumer pull, delivery scope, build-cost layering. L1–L7: exact crossover, K3/K9 labels, estimate labels, assumed device mix, hierarchical authorization, bounds, "buys Materialize" wording. Fixes applied.
+
+**DEC-001.** A second review found 2 high, 3 medium, 6 low. H1: client CPU basis mixed p99, 1/60 amortisation, and per-entry/per-value units; H2: S5 "from server egress" contradicted `period + overhead`. M1: D2f WASM factor and D6 scope; M2: p99 per-package allocation; M3: D4 cadence wording. L1–L6: client CPU overlap claim, 25k–41k contributions, K3/K11 legacy labels, K3 repetition, "if K3 is dropped"/weak evidence, b/c reconciliation. Fixes applied.
+
+Review session: `ses_ea8261124ffewIT7wHmP4QtF15` (child of the BUILD session). The original `ses_ea8c8529fffePn16RPUCljzDgc` is not resumable from this BUILD session; the external review record notes the limitation. The ANL and DEC fixes were applied after the audits; neither document has had a fresh verification pass.
+
+## 162. State and next steps
+
+- **DEC-001:** v0.4.0, last updated 2026-10-20. K3 self-set, unanchored, likely not realistic; unconstrained comparison is the realistic baseline. Client CPU and p99 are model columns with basis notes. S5 added (p99 < 250 ms server-to-client, r = 4 Hz, egress 10 Hz). Appendix A links verified.
+- **ANL-001:** v0.2.0. §8 engine-vs-Materialize (aggregation only); §9 delivery separate baselines. The shared snapshot is a contract property, not a differentiator; f32 parity is the narrow arithmetic edge; the mask advantage is against recompute-per-query SQL, not IVM.
+- **Topology:** tree; one parent per non-root node; channel fan-in/fan-out only within the unique parent edge.
+- **Bitmask:** candidate; per-device; raw vs aggregate; per-mask classes; exactness caveat; not privacy.
+- **Supervisor meeting:** still the gate. No build. No commit.
+- **Next:** the supervisor questions; anchor p99/read rate if S5 is real; run the SQL failing-baseline at V = 10/100, 1/60 Hz, with masks and exactness; add the two IEEE papers to related work if the supervisor wants the latency/consistency framing; decide whether the delivery comparison stays in ANL §9 or moves to DEC.
