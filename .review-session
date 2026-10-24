@@ -1,3 +1,5 @@
 # Default review subagent session. Resume this session for all future reviews.
-# Created 2026-10-23. First used for the CNP-003 v0.2.0 audit.
-ses_e973cde3cffegZlAAP3wZwwknd
+# Created 2026-10-24 (BUILD-HANDOVER-007). Replaces ses_e973cde3cffegZlAAP3wZwwknd,
+# which was not resumable from the new BUILD session.
+# First used for: orientation pass on CNP-004 v0.4.2, 2026-10-24.
+ses_e92ef5aacffet6YYRucwgYN60t

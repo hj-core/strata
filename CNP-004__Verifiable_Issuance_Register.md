@@ -4,18 +4,20 @@
 | --- | --- |
 | Document ID | CNP-004 |
 | Title | Project proposal — A Verifiable Issuance Register for Safety-Critical Certificates |
-| Version | 0.4.2 |
+| Version | 0.4.4 |
 | Status | Draft for supervisor review. Direction not approved. No implementation has started. |
 | Date | 2026-10-24 |
 | Module | COMP4299 — final-year dissertation project (dissertation, demonstration and evaluation) |
 | Related documents | `CNP-003` proposes the scope extension and is the companion to this note. Background only: `CNP-002`, `DEC-002`, `ANL-009`, `BUILD-HANDOVER-006`. |
-| Purpose | Propose a direction for COMP4299: a register of the certificates a safety decision rests on, with offline proof of commitment and archive proof of what is missing. |
-| Supersedes | `CNP-004` v0.1.0, v0.2.0, v0.3.0, v0.4.0 and v0.4.1. |
+| Purpose | Propose a direction for COMP4299: a register of the certificates a safety decision rests on, with offline proof of commitment and checkpoint proof of what the record does not contain. |
+| Supersedes | `CNP-004` v0.1.0, v0.2.0, v0.3.0, v0.4.0, v0.4.1, v0.4.2 and v0.4.3. |
 
 **Revision history.**
 
 | Version | Change |
 | --- | --- |
+| 0.4.4 | Tightens the subtitle to the 2 measured claims: commitment at issuance and checkpoint proof of absence. |
+| 0.4.3 | Defines the required-period schedule as a query input; bounds the checkpoint interval and adds witness enforcement as a condition of the claim. |
 | 0.4.2 | Anchors the audit attestation in the witness keys; separates storage deletion from tree rewrite; defines `period` as the UTC calendar year. |
 | 0.4.1 | Separates the auditor (O(N) projection) from the investigator (O(log N) proofs); rewrites the withholding case; fixes the completeness row and the R2 wording. |
 | 0.4.0 | Credits PKI with key binding and non-repudiation; reframes the gap as archive commitment; adds the 3 archive rows; treats the operator as untrusted. |
@@ -41,10 +43,12 @@
 | **Issuance leaf** | 1 entry in the register: certificate hash, laboratory, key, certificate date, subject reference and certificate type. |
 | **Subject** | The asset a certificate supports: a lift, a building, a batch. The laboratory declares it, and the certificate carries it. |
 | **Subject index** | A Merkle map from `(subject, period)` to a commitment over the leaves in that period, whose root appears in each checkpoint. `period` is the UTC calendar year of the certificate date. |
-| **Gap** | A required entry that the register does not contain, proven by non-inclusion. |
+| **Gap** | An entry required by the supplied schedule that the register does not contain, proven by non-inclusion. |
+| **Required-period schedule** | A declared list of `(subject_ref, period)` pairs that must hold a certificate, supplied with a subject query. Its source is named — a statutory interval, a manufacturer's calibration interval or an insurer's condition. The register proves presence or absence against it; it does not establish that the schedule is correct. |
 | **Auditor** | The party that rebuilds the index from the log at a checkpoint and signs an audit attestation over the checkpoint and both roots. One of the 3 witnesses holds the role. |
 | **Merkle tree** | A hash tree that supports compact proofs of inclusion and consistency. |
 | **Checkpoint** | A signed commitment to the state of the register at a point in time, including the subject-index root. |
+| **Maximum checkpoint interval** | The longest gap the policy permits between 2 checkpoints (the checkpoint cadence). Witnesses refuse to cosign across a longer gap. |
 | **First-inclusion checkpoint** | The checkpoint whose tree first contains a given leaf. |
 | **Issuance receipt** | A signed proof that a certificate hash was included in the register at a checkpoint. |
 | **Witness** | An independent party that cosigns a checkpoint. |
@@ -66,7 +70,7 @@
 ## 1. Project title
 
 > **A Verifiable Issuance Register for Safety-Critical Certificates**
-> *Offline proof of who issued a certificate, and archive proof of what is missing*
+> *Offline proof that a certificate was committed at issuance, and checkpoint proof of what the record does not contain*
 
 ### 1.1 Definition
 
@@ -75,6 +79,8 @@ A register of the certificates that safety decisions rest on, held by a log oper
 ### 1.2 Title rationale
 
 The title names the object (issuance of safety-critical certificates), the artefact (register) and the capability (verifiable). It omits the standard number (ISO/IEC 17025, §6), the protocol stack (RFC 9162, COSE) and the mechanism (Merkle log, subject index, witnesses, receipts), which belong in §4 and §6.
+
+The subtitle states the 2 claims the dissertation measures, one per audience: offline proof that a certificate was committed at issuance, for the verifier, and checkpoint proof — a non-inclusion proof against a cosigned checkpoint — of what the record does not contain, for the investigator. It deliberately avoids "who issued", which PKI already establishes (§2.1), and "what is missing", which would assert more than a non-inclusion proof can support (§4.5; R6 in §9.1).
 
 ---
 
@@ -194,7 +200,7 @@ The field verifier and the investigator ask different things of the same record:
 | | Field verifier | Investigator |
 | --- | --- | --- |
 | Holds | 1 certificate and its receipt | The archive, or a query against it |
-| Asks | Is this genuine? | What exists for this asset, and what is missing? |
+| Asks | Is this genuine? | What exists for this asset, and what is missing from the archive? |
 | Needs | Inclusion proof, offline | Enumeration, presence and absence proofs |
 | Time | Minutes | Days, after an incident |
 | Failure mode | Accepts an uncommitted certificate | Treats a hole as complete |
@@ -255,7 +261,9 @@ The certificate envelope carries a **subject reference**: the asset on which the
 The archive exposes 2 queries:
 
 - **by receipt:** is this certificate included at this checkpoint?
-- **by subject:** which leaves exist for this subject in a period range, and which required periods are absent?
+- **by subject:** which leaves exist for this subject in a period range, and which periods in the supplied schedule are absent?
+
+The subject query takes a **required-period schedule** as an input: a declared list of `(subject_ref, period)` pairs that must hold a certificate, with its source named — a statutory interval, a manufacturer's calibration interval or an insurer's condition. The register proves that each listed pair is present or absent. It does not establish that the schedule is the right one, and the report states the source beside the result. Without a declared schedule the query reports presence and enumeration only; it makes no gap claim.
 
 ### 4.2 Flow
 
@@ -264,7 +272,7 @@ The archive exposes 2 queries:
 3. **Log.** The operator checks the submission against the allow-list, appends the leaf, updates the subject index, and returns the receipt at the next checkpoint. The checkpoint is signed and cosigned by witnesses.
 4. **Present.** The certificate and receipt travel to the verifier, possibly years later and possibly without the laboratory.
 5. **Decide.** The verifier checks offline, at UTC day granularity: the certificate signature against the admitted key; the recomputed hash against the leaf; the leaf's laboratory, certificate date, subject reference and certificate type against the certificate; the inclusion proof; the checkpoint signature and witness threshold; the freshness rule; and, if the bundle carries a later checkpoint, the consistency proof and any fork.
-6. **Investigate.** The investigator queries the subject index for a period range. The archive returns each leaf with an inclusion proof at a checkpoint whose timestamp is at or after the end of the range plus 1 cadence, and a non-inclusion proof against the same checkpoint for each required period with no leaf. It also returns a **deadline proof**: a non-inclusion proof against the first checkpoint after the period's deadline, which states the position at the deadline rather than at query time. The investigator verifies both against the same pinned anchors and reports the timeline and the gaps. If no checkpoint at or after the range end is available, the result is `unverifiable`.
+6. **Investigate.** The investigator queries the subject index for a period range, supplying the required-period schedule. The archive returns each leaf with an inclusion proof at a checkpoint whose timestamp is at or after the end of the range plus 1 cadence, and a non-inclusion proof against the same checkpoint for each period in the supplied schedule with no leaf. It also returns a **deadline proof**: a non-inclusion proof against the first checkpoint after the period's deadline, which states the position at the deadline rather than at query time. The investigator verifies both against the same pinned anchors and reports the timeline, the gaps and the schedule source. If no checkpoint at or after the range end is available, the result is `unverifiable`.
 
 **Index projection.** Each checkpoint commits the log root and the index root. An **auditor** rebuilds the index from the log leaves at a checkpoint and compares the 2 roots. The rebuild is linear in the number of leaves (O(N)); it runs periodically and at an incident, not on every query. The result is a separate **audit attestation** over the checkpoint identifier, the log root and the index root, signed by 1 of the 3 witness keys. The **investigator** does not download the log and does not rebuild the index: it verifies inclusion and non-inclusion proofs (O(log N)) against the cosigned index root, and checks the audit attestation for that root. The attestation may lag the checkpoint, and its timestamp is what the investigator reports. Between audits, the guarantee rests on the last audited root; the proof itself is against the current cosigned root. The attestation is reproducible: any party can rerun the audit, so a false attestation is detectable, not authoritative. This is the Index trust limit in §4.5.
 
@@ -282,6 +290,7 @@ The archive exposes 2 queries:
 | Time | RFC 3161 token per checkpoint | Independent time anchor |
 | Certificate envelope | DCC v3.3.0 structure (PTB), with an issuance-receipt extension | Reuses the deployed digital calibration certificate format |
 | Witnesses | 3 independent cosigners over checkpoints, threshold 2-of-3 | Non-equivocation without a public ledger |
+| Checkpoint cadence | A published maximum interval between checkpoints; a witness refuses to cosign across a longer gap | Bounds the freshness claim and gives the deadline proof a fixed target |
 | Field verifier | Offline command-line tool, plus a minimal web view | Named outcomes; reproducible |
 | Investigator query | An archive client with 2 modes: `--query` verifies compact proofs in O(log N) against the cosigned index root; `--audit` rebuilds the index in O(N) | The query never downloads the log; the audit is a separate role |
 
@@ -296,7 +305,7 @@ SCITT (RFC 9943) supplies the architecture: signed statement, transparent statem
 | **Commitment** | The leaf is included at its first-inclusion checkpoint, which falls within 1 cadence of the certificate date | Yes | Inclusion proof and checkpoint signature |
 | **Non-repudiation** | The laboratory cannot deny the submission without contradicting a cosigned checkpoint | Yes | Operator signature and witness cosignatures |
 | **Enumeration** | The full set of leaves the register holds for a subject in a period range | Yes, against a local snapshot | Subject index, inclusion proofs and the projection audit |
-| **Provable absence** | No leaf exists for a required subject-period pair | Yes, against a local snapshot | Non-inclusion proof against a cosigned index root at or after the range end plus 1 cadence, and a deadline proof at the first checkpoint after the period deadline |
+| **Provable absence** | No leaf exists for a scheduled subject-period pair | Yes, against a local snapshot | The schedule supplied with the query, a non-inclusion proof against a cosigned index root at or after the range end plus 1 cadence, and a deadline proof at the first checkpoint after the period deadline |
 | **Non-revision** | No leaf was removed or altered; every later addition is consistent | Yes, against the checkpoints held | Merkle log and consistency proofs |
 | **Non-equivocation** | 2 parties comparing cosigned checkpoints detect a fork | Yes | At least 1 honest witness |
 | **Self-containment** | The field verifier needs neither the laboratory nor the operator | Yes | A bundle that carries the leaf, the proof and the checkpoint |
@@ -306,10 +315,11 @@ Section 5.1 marks 5 rows that no baseline answers, all archive properties: offli
 ### 4.5 Limits of the claim
 
 - **Performance.** The register proves that the laboratory submitted a certificate, not that the work happened. A laboratory can log a certificate for work it did not perform, and a logged leaf can fill a gap that no real work supports. A failed calibration that never becomes a certificate is outside the register, so suppression of a result is invisible unless the result was issued.
-- **Completeness.** The register does not prove that it contains every certificate the laboratory issued. It proves that the archive has no indexed entry for a required period. Whether that means the work did not happen, was not logged, was logged under another subject, or never became a certificate is a question for the investigator.
+- **Completeness.** The register does not prove that it contains every certificate the laboratory issued. It proves that the archive has no indexed entry for a scheduled period. Whether that means the work did not happen, was not logged, was logged under another subject, or never became a certificate is a question for the investigator.
+- **Schedule authority.** The register proves absence relative to a schedule supplied with the query. It does not establish that the statutory, manufacturer or insurer interval is the right one, and a wrong schedule produces a wrong gap. The report names the schedule source, and the dissertation treats that source as an input outside the claim.
 - **Attribution.** The subject reference is declared by the laboratory and covered by its signature. The register proves that the declared asset was named, not that the asset is correct. A certificate for 1 lift can be filed under another, and the archive cannot tell.
 - **Index trust.** A light investigator verifies a non-inclusion proof against a cosigned index root. The root is a projection of the log only if the projection audit runs. Between audits, the guarantee is as of the last audit attestation, and a party that skips the attestation trusts the operator's index.
-- **Timeliness and freshness.** The sequence of checkpoints fixes order, not promptness. The claim assumes that the laboratory logs each certificate within 1 checkpoint of its date; a later submission with an earlier date returns `backdated`.
+- **Timeliness and freshness.** The sequence of checkpoints fixes order, not promptness. The claim assumes that the laboratory logs each certificate within 1 checkpoint of its date; a later submission with an earlier date returns `backdated`. It also assumes that the operator publishes a checkpoint at least every declared maximum interval. That bound is enforced only by the witnesses' refusal to cosign a longer gap, so a colluding witness threshold can still stall the record. One window stays open even with the bound: a certificate submitted after the period deadline but before the first post-deadline checkpoint is indistinguishable, at that checkpoint, from a punctual submission. The freshness rule catches submissions later than 1 cadence after the certificate date, not this window.
 - **Signer authority.** The register proves that an admitted laboratory key signed, not that the individual who used it was authorised by the laboratory.
 - **Key compromise.** A compromised laboratory key can sign and log certificates the laboratory never issued. Revocation is prospective and cannot erase what the log already contains.
 - **Legal recognition.** The register carries no legal recognition. The operator's record has no regulatory weight by itself.
@@ -318,9 +328,9 @@ Section 5.1 marks 5 rows that no baseline answers, all archive properties: offli
 
 ### 4.6 The claim
 
-> A verifier can establish, offline and years later, that a certificate was committed to the archive by the laboratory it names, at the time it claims, within 1 checkpoint cadence; and an investigator can establish, from the archive, the full set of certificates the register holds for an asset and the absence of any required entry — without the laboratory's cooperation and without trusting the operator's account of its own history.
+> A verifier can establish, offline and years later, that a certificate was committed to the archive by the laboratory it names, at the time it claims, within 1 checkpoint cadence; and an investigator can establish, from the archive, the full set of certificates the register holds for an asset and the absence of any entry required by a schedule supplied with the query — without the laboratory's cooperation and without trusting the operator's account of its own history.
 
-The claim holds under 7 conditions: the laboratory logs the certificate at issuance (the condition in §4.7); the laboratory logs within 1 checkpoint of the certificate date; the verifier and investigator hold the public trust-anchor identifiers; at least 1 witness is honest; the timestamping authority is honest; the investigator's snapshot holds a checkpoint at or after the range end plus 1 cadence; and fork detection has a party that holds a later checkpoint or compares checkpoints with another party. The limits of the claim are in §4.5.
+The claim holds under 9 conditions: the laboratory logs the certificate at issuance (the condition in §4.7); the laboratory logs within 1 checkpoint of the certificate date; the verifier and investigator hold the public trust-anchor identifiers; at least 1 witness is honest; the timestamping authority is honest; the investigator's snapshot holds a checkpoint at or after the range end plus 1 cadence; the operator publishes a checkpoint at least every declared maximum interval, and the witnesses refuse to cosign a longer gap; the schedule supplied with the query states the applicable requirement; and fork detection has a party that holds a later checkpoint or compares checkpoints with another party. The limits of the claim are in §4.5.
 
 ### 4.7 Condition of operation
 
@@ -328,6 +338,8 @@ The Certificate Transparency model depends on 2 conditions: certificate authorit
 
 1. **The laboratory logs** every safety-critical certificate it issues, as a condition of the certificate being admissible for a public-safety decision.
 2. **The decision-maker refuses** a certificate without an issuance receipt, through a procurement rule, a regulatory requirement or an insurer's condition.
+
+The pair is not sufficient on its own. The operator must also publish a checkpoint at least every declared maximum interval, and the witnesses must refuse to cosign across a longer gap. Without that bound, a delayed checkpoint lets a withheld certificate enter the log before the first post-deadline checkpoint, and the deadline proof in §4.2 loses its force. The bound does not close the window between the deadline and the first post-deadline checkpoint; §4.5 states that residual. The interval is a published policy term, decided at C1, not a per-query choice.
 
 The first condition has a lever that the scope register lacks: the accreditation body can make logging a condition of accreditation. The second needs an authority, a procuring body or an insurer to refuse a certificate without a receipt, which is the harder one. Without it, a laboratory can issue without logging, and the register does not cover the certificate.
 
@@ -368,7 +380,7 @@ Legend: ✓ yes · ◐ partial · ✗ no. **A** is current practice: a signed ce
 | Proof that the certificate was committed to the archive | ✗ | ✗ | ✗ | **✓** |
 | Enumerate the certificates for an asset | ✗ | ✗ | ✓ | ✓ |
 | Show a second certificate for the same asset-period | ✗ | ✗ | ✓ | ✓ |
-| Prove that a required entry is absent | ✗ | ✗ | ◐ | **✓** |
+| Prove that a scheduled entry is absent | ✗ | ✗ | ◐ | **✓** |
 | Detect deletion or alteration of a logged entry | ✗ | ✗ | ✗ | **✓** |
 | Detect post-deadline backfill | ✗ | ✗ | ✗ | **✓** |
 | Offline, from the certificate and receipt alone | ✗ | ✓ | ✗ | ✓ |
@@ -378,7 +390,7 @@ Legend: ✓ yes · ◐ partial · ✗ no. **A** is current practice: a signed ce
 | All certificates disclosed (completeness) | ✗ | ✗ | ✗ | ✗ |
 | Legal recognition | ◐ | ◐ | ◐ | ✗ |
 
-**What the matrix shows.** D answers 5 rows that no other option answers, and all 5 are archive properties: proof that the certificate was committed, a required entry can be proven absent, deletion or alteration of a logged entry is detectable, post-deadline backfill is detectable, and a fork is detectable. Baseline B+C, taken together, answers every other row that any option answers; performance, completeness and legal recognition remain unanswered by all. PKI binds the key and gives non-repudiation, and the registry enumerates. The increment is the archive, not the signature.
+**What the matrix shows.** D answers 5 rows that no other option answers, and all 5 are archive properties: proof that the certificate was committed, a scheduled entry can be proven absent, deletion or alteration of a logged entry is detectable, post-deadline backfill is detectable, and a fork is detectable. Baseline B+C, taken together, answers every other row that any option answers; performance, completeness and legal recognition remain unanswered by all. PKI binds the key and gives non-repudiation, and the registry enumerates. The increment is the archive, not the signature.
 
 **Trust assumptions.**
 
@@ -403,7 +415,7 @@ Legend: ✓ yes · ◐ partial · ✗ no. **A** is current practice: a signed ce
 
 ### 5.3 Summary of the comparison
 
-Existing practice answers "a key signed this document". The proposed register answers "this laboratory issued it, and it was committed; here is everything the archive holds for the asset, and here is what is missing". That is the increment: the archive properties — commitment, absence, tamper evidence, backfill detection and non-equivocation. Key binding, issuance and non-repudiation are delivered by PKI plus the registry; D adds what a signed document and a database cannot show.
+Existing practice answers "a key signed this document". The proposed register answers "this laboratory issued it, and it was committed; here is everything the archive holds for the asset, and here is what the archive does not contain". That is the increment: the archive properties — commitment, absence, tamper evidence, backfill detection and non-equivocation. Key binding, issuance and non-repudiation are delivered by PKI plus the registry; D adds what a signed document and a database cannot show.
 
 ### 5.4 Existing-practice risk
 
@@ -418,7 +430,7 @@ A central registry is an incremental product change. A "CT for certificates" fra
 - **Object:** the issuance register of a log operator, which may be the regulator or an accreditation body.
 - **Certificate class:** ISO/IEC 17025 calibration certificates for permanently installed lift brake-force sensors (the evaluated family), with overload and pressure sensors as boundary cases.
 - **Artefact:** the issuance receipt, embedded in a DCC-compatible envelope (field names and structure, not full v3.3.0 schema validation).
-- **Mechanism:** Merkle log, subject index, signed allow-list, signed checkpoints, witness cosignatures, offline verifier and archive query.
+- **Mechanism:** Merkle log, subject index, signed allow-list, signed checkpoints at a published maximum interval, witness cosignatures, offline verifier and archive query. The required-period schedule is a query input, not a register output.
 - **Evaluation:** simulated operator, synthetic certificate data, 10 core attacks, 3 baseline arms.
 - **Scenario:** a Macau investigator after a lift incident, a foreign or defunct laboratory, certificates from 2020 to 2024, and a missing year.
 
@@ -457,6 +469,7 @@ An installed brake-force sensor is the instance because the asset is fixed, the 
 4. A mandate can be produced by 1 of the 3 routes in §3.5; the proposal states this as a condition, not a fact.
 5. Public DCC and certificate structures are representative enough to construct synthetic data.
 6. The visibility model is chosen at C1: public leaves, or regulator-only leaves with public checkpoints.
+7. The required-period schedule is supplied with the query and its source is named. The register proves absence relative to it and does not establish it.
 
 ### 6.5 Falsifiers and gates
 
@@ -480,12 +493,12 @@ The evaluation compares 4 arms: **A**, current practice; **B**, a signed DCC und
 
 | ID | Deliverable | Acceptance criterion |
 | --- | --- | --- |
-| **C1** | Design basis: evidence note, requirements, threat model and wire format | The §2.4 evidence is confirmed; the limitation check is recorded; the leaf, checkpoint, allow-list, index, receipt and audit-attestation formats are specified with type discriminators; the freshness rule and the visibility model are defined; the retention requirement is stated |
+| **C1** | Design basis: evidence note, requirements, threat model and wire format | The §2.4 evidence is confirmed; the limitation check is recorded; the leaf, checkpoint, allow-list, index, receipt and audit-attestation formats are specified with type discriminators; the freshness rule, the maximum checkpoint interval, the required-period schedule input and the visibility model are defined; the retention requirement is stated |
 | **C2** | Register log service | A leaf can be submitted, admitted against the allow-list, appended and proven included; the subject index updates and its root enters each checkpoint; a deleted or altered leaf breaks a consistency proof |
 | **C3** | Witness cosigner | An independent process cosigns checkpoints; a 2-of-3 threshold is enforced; a fork is detectable in the evaluation |
 | **C4** | Receipt assembler | A certificate receives a receipt with the leaf, the inclusion proof, the cosigned checkpoint and the TSA token; the envelope is DCC-compatible (subset) |
 | **C5** | Field verifier | A command-line tool and a minimal web view return a report whose primary field is a named outcome: `issued_and_logged`, `not_logged`, `log_entry_mismatch`, `backdated`, `checkpoint_invalid`, `witness_insufficient`, `history_rewritten`, `fork_detected`, `key_not_admitted` and `certificate_tampered` |
-| **C6** | Archive query and gap analysis | An investigator tool has 2 modes. `--query` returns the leaves for a subject and period range, each with an inclusion proof at a checkpoint at or after the range end plus 1 cadence, and a non-inclusion proof against the same checkpoint for each required period with no leaf, plus a deadline proof at the first checkpoint after the period deadline; it verifies the proofs in O(log N) against the cosigned index root, checks the audit attestation for that root (signed by 1 of the 3 witness keys), and reports the gaps as `present`, `absent` or `unverifiable`, with `not required` as a schedule attribute. `--audit` rebuilds the index from the log in O(N), compares the roots and signs the audit attestation. The query never downloads the log and returns no unproven assertion |
+| **C6** | Archive query and gap analysis | An investigator tool has 2 modes. `--query` takes a required-period schedule with a named source and returns the leaves for a subject and period range, each with an inclusion proof at a checkpoint at or after the range end plus 1 cadence, and a non-inclusion proof against the same checkpoint for each period in the supplied schedule with no leaf, plus a deadline proof at the first checkpoint after the period deadline; it verifies the proofs in O(log N) against the cosigned index root, checks the audit attestation for that root (signed by 1 of the 3 witness keys), and reports the gaps as `present`, `absent` or `unverifiable`, with `not required` as a schedule attribute and the schedule source named. Without a supplied schedule it reports presence and enumeration only and makes no gap claim. `--audit` rebuilds the index from the log in O(N), compares the roots and signs the audit attestation. The query never downloads the log and returns no unproven assertion |
 | **C7** | Evaluation harness and results | 4 arms against 10 core attacks — forged certificate, tampered certificate, backdated certificate, repudiation, deleted entry, rewrite, fork, missing witness, filled gap and backfill — report detection, latency, proof size and trust-anchor counts; remaining threats are reported as limitations |
 | **C8** | Dissertation | Problem, evidence, design, implementation, evaluation, boundary, related work and conclusion |
 | **C9** | Demonstration | The lift incident end to end: issue and log 2 years, skip the next, dissolve the laboratory, investigate in 2026, verify each receipt and prove the missing year |
@@ -508,7 +521,7 @@ The evaluation compares 4 arms: **A**, current practice; **B**, a signed DCC und
 | Auditor | 1 of the 3 witnesses, running `C6 --audit` and signing the audit attestation |
 | Time authority | A TSA issuing RFC 3161 tokens |
 
-**The case.** A brake-force sensor BF-4471 is permanently installed on lift L-4471 and is calibrated every 2 years. Each certificate names BF-4471 as the calibration item and L-4471 as the subject reference; both are covered by the certificate hash. The laboratory logs the 2020 and 2022 calibrations. The 2024 calibration is due, but the owner skips it and no certificate is issued; the laboratory dissolves later that year. In 2025 the building changes insurer. The new insurer's engineer checks the 2022 receipt offline, flags the missing 2024 certificate, and binds the policy with a condition to produce it within 30 days. The owner claims the certificate was lost in the handover and stalls. In 2026 a brake incident occurs, and the investigator queries the archive for L-4471.
+**The case.** A brake-force sensor BF-4471 is permanently installed on lift L-4471. The required-period schedule supplied to the query is the manufacturer's 2-year calibration interval for this sensor, anchored at the 2020 commissioning calibration and stated as the pairs 2020, 2022 and 2024; it is a declared input, not a finding of the register. Each certificate names BF-4471 as the calibration item and L-4471 as the subject reference; both are covered by the certificate hash. The laboratory logs the 2020 and 2022 calibrations. Under the declared schedule the 2024 calibration is due, but the owner skips it and no certificate is issued; the laboratory dissolves later that year. In 2025 the building changes insurer. The new insurer's engineer checks the 2022 receipt offline, flags the missing 2024 certificate, and binds the policy with a condition to produce it within 30 days. The owner claims the certificate was lost in the handover and stalls. In 2026 a brake incident occurs, and the investigator queries the archive for L-4471.
 
 **The bundle.** The field verifier receives 3 items:
 
@@ -521,7 +534,7 @@ The investigator holds the same anchors and queries the archive.
 **Happy path.**
 
 1. **2020–2022 — issue and log.** Each certificate is signed, submitted and logged. Checkpoints CP-2144 and CP-2387 commit the leaves and the subject index.
-2. **2024 — no certificate.** The calibration is due, the owner skips it, and no certificate is issued. Checkpoint CP-2500, dated 2025-01-05, records the state at the deadline.
+2. **2024 — no certificate.** Under the declared schedule the calibration is due, the owner skips it, and no certificate is issued. Checkpoint CP-2500, dated 2025-01-05, records the state at the deadline.
 3. **2026 — investigate.** The authority queries L-4471 for 2019–2025. The archive returns 2 leaves with inclusion proofs, a non-inclusion proof for 2024 at query time against CP-3100, and a deadline proof at CP-2500. Each proof is checked against the pinned anchors.
 
 The expected output:
@@ -529,7 +542,9 @@ The expected output:
 ```text
 subject                   L-4471
 period                    2019-01-01 to 2025-12-31
+schedule                  manufacturer interval, 24 months (supplied)
 query_checkpoint          CP-3100, 2026-01-15, witnesses 2/3
+2019                      not required
 2020                      present, CP-2144, witnesses 2/3
 2021                      not required
 2022                      present, CP-2387, witnesses 2/3
@@ -540,7 +555,7 @@ gap                       2024
 laboratory                Pearl River Calibration, dissolved 2024
 ```
 
-The output separates 3 results: the certificate is present and genuine; the certificate is absent; the archive cannot decide. `not required` is a schedule attribute, not a result. The absence is proven, which is what a pile of PDFs cannot do.
+The output separates 3 results: the certificate is present and genuine; the certificate is absent; the archive cannot decide. `not required` is a schedule attribute, not a result. The `schedule` line names the source, so the gap is read against a declared requirement rather than an assumed one. The absence is proven, which is what a pile of PDFs cannot do.
 
 **Attack variants.** Each variant is a scripted change to the same archive or bundle.
 
@@ -606,7 +621,7 @@ Week 1 begins when supervisor approval is recorded. The plan uses weeks; no cale
 | Phase | Weeks | Indicative effort | Activities | Output | Milestone |
 | --- | --- | --- | --- | --- | --- |
 | **P0 — Approval** | W1 | ~8 h | Confirm direction, module constraints, scope and ethics | Signed-off proposal | **M0 — approval recorded** |
-| **P1 — Design** | W2–W5 | ~54 h | Limitation check; requirements; threat model; leaf, index and receipt formats; allow-list; freshness rule; visibility model; chapter draft | C1 | **M1 / Gate G-A** |
+| **P1 — Design** | W2–W5 | ~54 h | Limitation check; requirements; threat model; leaf, index and receipt formats; allow-list; freshness rule; maximum checkpoint interval; required-period schedule; visibility model; chapter draft | C1 | **M1 / Gate G-A** |
 | **P2 — Implementation** | W6–W12 | ~84 h | Log; subject index; allow-list; witness cosigner; receipt issuer; field verifier; archive query; demonstration data; chapter draft | C2–C6 | **M2 — end-to-end slice** |
 | **P3 — Evaluation** | W13–W15 | ~34 h | 10 attacks; 4 arms; gap case; metrics; analysis; chapter draft | C7 | **M3 / Gate G-B** |
 | **P4 — Writing and demonstration** | W16–W19 | ~62 h | Integrate and revise the dissertation; demonstration script; draft to supervisor by end W17; revisions in W18–W19 | C8, C9 | **M4 — revised draft and demonstration ready** |
@@ -662,4 +677,4 @@ Week 1 begins when supervisor approval is recorded. The plan uses weeks; no cale
 
 ---
 
-*End of CNP-004 v0.4.2. This document proposes a direction. It does not record approval and does not authorise implementation.*
+*End of CNP-004 v0.4.4. This document proposes a direction. It does not record approval and does not authorise implementation.*
